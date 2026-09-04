@@ -27,4 +27,3 @@ Thumbs.db
 *.apk
 
 # --- Workflow pushed separately; re-add under .github once workflow scope available
-.github/workflows/
