@@ -7,7 +7,7 @@ import com.xqassist.core.Position
 
 /**
  * First-pass piece reader: at each grid intersection, crop a small patch and
- * match colors against the bundled piece templates (assets/pieces/*.webp).
+ * match colors against the bundled piece templates (assets/pieces matching the A-license webp templates).
  * Plan: upgrade to OpenCV template matching / TFLite when accuracy requires.
  */
 class TemplatePieceReader(context: Context) : ChessboardReader {
