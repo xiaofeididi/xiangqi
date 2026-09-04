@@ -1,0 +1,27 @@
+# --- Android / Gradle ---
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.iml
+android/captures/
+android/.externalNativeBuild/
+android/.cxx/
+
+# --- Python ---
+**/__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- OS / editors ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Root sample engine binaries (android bundled copy is tracked) ---
+/engine/
+/pkg/
+*.apk
