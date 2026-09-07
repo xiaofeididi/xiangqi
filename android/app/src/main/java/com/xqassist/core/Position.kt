@@ -91,6 +91,20 @@ class Position private constructor(
         sideToMove = if (sideToMove == "w") "b" else "w"
     }
 
+    /** Undo an applied ICCS move; restoredPiece is the piece that moved, capturedPiece may be null. */
+    fun undoIccs(move: String, restoredPiece: String, capturedPiece: String?) {
+        val m = Regex("([a-i])([0-9])([a-i])([0-9])").matchEntire(move.trim().lowercase())
+            ?: return
+        val fromFile = FILE_NAMES.indexOf(m.groupValues[1])
+        val fromRank = m.groupValues[2].toInt()
+        val toFile = FILE_NAMES.indexOf(m.groupValues[3])
+        val toRank = m.groupValues[4].toInt()
+        setPiece(toRank, toFile, capturedPiece)
+        setPiece(fromRank, fromFile, restoredPiece)
+        sideToMove = if (sideToMove == "w") "b" else "w"
+        if (sideToMove == "w") moveNum--
+    }
+
     /** Infer moves (fromRank,fromFile,toRank,toFile) by comparing to `other`. */
     fun diffFrom(other: Position): List<Quad> {
         val disappeared = mutableListOf<Coord>()

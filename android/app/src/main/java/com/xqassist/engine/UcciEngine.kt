@@ -29,6 +29,9 @@ class UcciEngine(
     private val threads: Int = 2,
     private val hashMb: Int = 128,
 ) {
+    var isReady: Boolean = false
+        private set
+
     private var process: Process? = null
     private var writer: OutputStreamWriter? = null
     private var reader: BufferedReader? = null
@@ -42,19 +45,24 @@ class UcciEngine(
         android.util.Log.i("Ucci", "start ${engineFile.absolutePath} nnue=${nnueFile?.exists()}")
         if (nnueFile != null) pb.environment()["PIKAFISH_NNUE"] = nnueFile.absolutePath
         pb.redirectErrorStream(true)
-        val proc = try { pb.start() } catch (t: Throwable) {
-            android.util.Log.e("Ucci", "start failed", t); return
+        val proc = try {
+            pb.start()
+        } catch (t: Throwable) {
+            android.util.Log.e("Ucci", "start failed", t)
+            return
         }
         process = proc
         writer = OutputStreamWriter(proc.outputStream, Charsets.UTF_8)
         reader = BufferedReader(InputStreamReader(proc.inputStream, Charsets.UTF_8))
         send("ucci")
-        if (!waitFor("ucciok", 6000)) { send("uci"); waitFor("uciok", 4000) }
+        val ucciOk = waitFor("ucciok", 6000)
+        if (!ucciOk) { send("uci"); waitFor("uciok", 4000) }
         send("setoption name Threads value $threads")
         send("setoption name Hash value $hashMb")
         send("isready")
-        waitFor("readyok", 6000)
-        android.util.Log.i("Ucci", "ready")
+        val readyOk = waitFor("readyok", 6000)
+        isReady = (ucciOk || waitFor("uciok", 100)) && readyOk
+        android.util.Log.i("Ucci", "ready=$isReady")
     }
 
     fun send(cmd: String) {

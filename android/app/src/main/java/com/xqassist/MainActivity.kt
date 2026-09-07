@@ -19,6 +19,7 @@ import com.xqassist.core.Quad
 import com.xqassist.engine.CloudBook
 import com.xqassist.engine.EngineInstaller
 import com.xqassist.engine.EngineResult
+import com.xqassist.engine.FallbackEngine
 import com.xqassist.engine.UcciEngine
 import com.xqassist.game.GameController
 import com.xqassist.ui.BoardView
@@ -36,6 +37,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var titleView: TextView
     private var engine: UcciEngine? = null
+    private var fallbackEngine: FallbackEngine? = null
+    private var engineReady = false
     private val engineMutex = Mutex()
     private val cloudBook = CloudBook()
     private var thinking = false
@@ -47,18 +50,33 @@ class MainActivity : AppCompatActivity() {
         controller = GameController()
         buildUi()
         refreshBoard()
-        setStatus("正在启动皮卡鱼引擎…")
+        setStatus("正在启动引擎…")
         lifecycleScope.launch(Dispatchers.IO) {
-            val file = EngineInstaller.install(this@MainActivity)
-            if (file == null) {
-                withContext(Dispatchers.Main) { setStatus("引擎安装失败") }
-                return@launch
+            try {
+                val file = EngineInstaller.install(this@MainActivity)
+                if (file != null) {
+                    val e = UcciEngine(file, EngineInstaller.nnueFile(this@MainActivity), 2, 128)
+                    e.start()
+                    if (e.isReady) {
+                        engine = e
+                        fallbackEngine = null
+                        engineReady = true
+                        android.util.Log.i(TAG, "Pikafish ready")
+                    } else {
+                        e.stop()
+                        android.util.Log.w(TAG, "Pikafish not ready, using fallback")
+                    }
+                }
+            } catch (t: Throwable) {
+                android.util.Log.e(TAG, "Pikafish startup failed", t)
             }
-            val e = UcciEngine(file, EngineInstaller.nnueFile(this@MainActivity), 2, 128)
-            e.start()
-            engine = e
+
+            if (!engineReady) {
+                fallbackEngine = FallbackEngine()
+                engineReady = true
+            }
             withContext(Dispatchers.Main) {
-                setStatus("皮卡鱼已就绪，红方先行")
+                setStatus(if (engine != null) "皮卡鱼已就绪，红方先行" else "内置引擎已就绪，红方先行")
                 maybeAiMove()
             }
         }
@@ -162,8 +180,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun maybeAiMove() {
-        val e = engine ?: return
-        if (!controller.autoReply || thinking || controller.isGameOver) return
+        if (!engineReady || !controller.autoReply || thinking || controller.isGameOver) return
         val aiSide = if (controller.humanSide == "w") "b" else "w"
         if (controller.sideToMove != aiSide) return
         thinking = true
@@ -171,7 +188,7 @@ class MainActivity : AppCompatActivity() {
         refreshBoard()
         val fen = controller.pos.toFen()
         lifecycleScope.launch(Dispatchers.IO) {
-            val result = engineMutex.withLock { e.analyze(fen, thinkMs) }
+            val result = analyzeNow(fen, thinkMs)
             withContext(Dispatchers.Main) {
                 thinking = false
                 controller.thinking = false
@@ -180,7 +197,7 @@ class MainActivity : AppCompatActivity() {
                     val cn = controller.lastMove?.let {
                         Notation.moveToChinese(controller.lastPreMove ?: controller.pos, it.iccs())
                     } ?: ""
-                    setStatus("皮卡鱼走了 $cn\n${formatEngineResult(result)}\n${gameStatusText()}")
+                    setStatus("${if (engine != null) "皮卡鱼" else "内置引擎"}走了 $cn\n${formatEngineResult(result)}\n${gameStatusText()}")
                 } else {
                     setStatus(gameStatusText() + "\n引擎着法无效：${result.bestmove}")
                 }
@@ -190,7 +207,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun askHint() {
-        val e = engine ?: run {
+        if (!engineReady || thinking || controller.isGameOver) {
             Toast.makeText(this, "引擎还未就绪", Toast.LENGTH_SHORT).show()
             return
         }
@@ -199,11 +216,11 @@ class MainActivity : AppCompatActivity() {
         setStatus("正在请求皮卡鱼连线…")
         val fen = controller.pos.toFen()
         lifecycleScope.launch(Dispatchers.IO) {
-            val result = engineMutex.withLock { e.analyze(fen, thinkMs) }
+            val result = analyzeNow(fen, thinkMs)
             withContext(Dispatchers.Main) {
                 thinking = false
                 controller.hintFromIccs(result.bestmove)
-                setStatus("皮卡鱼建议：${result.chinese(controller.pos)}\n${formatEngineResult(result)}")
+                setStatus("${if (engine != null) "皮卡鱼" else "内置引擎"}建议：${result.chinese(controller.pos)}\n${formatEngineResult(result)}")
                 refreshBoard()
             }
         }
@@ -270,6 +287,15 @@ class MainActivity : AppCompatActivity() {
         return "深度 ${r.depth} · 评分 $score"
     }
 
+    private suspend fun analyzeNow(fen: String, thinkMs: Int): EngineResult =
+        engineMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val external = engine
+                if (external != null) external.analyze(fen, thinkMs)
+                else fallbackEngine?.analyze(controller.pos) ?: EngineResult()
+            }
+        }
+
     private fun gameStatusText(): String {
         val side = if (controller.sideToMove == "w") "红方" else "黑方"
         return when (val w = controller.winner()) {
@@ -287,6 +313,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun setStatus(text: String) {
         status.text = text
+    }
+
+    companion object {
+        private const val TAG = "XqAssist"
     }
 
     override fun onDestroy() {
