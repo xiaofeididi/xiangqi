@@ -28,6 +28,7 @@ class BoardView @JvmOverloads constructor(
 
     private val pieceBitmap = mutableMapOf<String, Bitmap>()
 
+    private val density = resources.displayMetrics.density
     private val bgPaint = Paint().apply { color = Color.rgb(0xE8, 0xC7, 0x8F) }
     private val linePaint = Paint().apply {
         color = Color.rgb(0x5A, 0x3A, 0x1A); strokeWidth = 2f * density; style = Paint.Style.STROKE
