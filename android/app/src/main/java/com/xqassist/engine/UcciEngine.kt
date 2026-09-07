@@ -53,7 +53,7 @@ class UcciEngine(
         if (!engineFile.canExecute()) engineFile.setExecutable(true)
         val builder = ProcessBuilder(engineFile.absolutePath)
         builder.redirectErrorStream(true)
-        if (nnueFile != null) builder.environment()["PIKAFISH_NNUE"] = nnueFile.absolutePath
+        nnueFile?.parentFile?.let { builder.directory(it) }
         log("启动：${engineFile.absolutePath} NNUE=${nnueFile?.exists() == true}")
         val started = try {
             builder.start()
@@ -75,6 +75,10 @@ class UcciEngine(
         }
         send("setoption name Threads value ${threads.coerceIn(1, 8)}")
         send("setoption name Hash value ${hashMb.coerceIn(16, 512)}")
+        if (nnueFile != null && nnueFile.exists()) {
+            // 工作目录是 /，必须显式指定 NNUE 绝对路径，否则搜索时引擎静默失败
+            send("setoption name EvalFile value ${nnueFile.absolutePath}")
+        }
         send("isready")
         val readyOk = waitFor("readyok", 8000)
         isReady = readyOk
