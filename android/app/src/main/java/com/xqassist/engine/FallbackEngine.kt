@@ -73,7 +73,7 @@ class FallbackEngine {
         val toFile = files.indexOf(move[2])
         val toRank = move[3].digitToInt()
         val target = position.pieceAt(toRank, toFile) ?: return 0
-        if (target[0] == position.sideToMove) return 0
+        if (target[0].toString() == position.sideToMove) return 0
         return pieceValue[target[1]] ?: 0
     }
 
