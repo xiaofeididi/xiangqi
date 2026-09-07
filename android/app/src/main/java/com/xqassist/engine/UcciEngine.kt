@@ -1,10 +1,11 @@
 package com.xqassist.engine
 
-
-import com.xqassist.core.Position
 import com.xqassist.core.Notation
-
-import kotlinx.coroutines.*
+import com.xqassist.core.Position
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
@@ -21,10 +22,7 @@ data class EngineResult(
     fun chinese(pos: Position): String = Notation.moveToChinese(pos, bestmove)
 }
 
-/**
- * Pikafish UCCI engine wrapper. Runs the bundled arm64 binary via Process,
- * talks UCCI over stdin/stdout off the main thread.
- */
+/** Pikafish UCCI engine wrapper (child process, stdin/stdout). Run off main thread. */
 class UcciEngine(
     private val engineFile: File,
     private val nnueFile: File? = null,
@@ -36,37 +34,43 @@ class UcciEngine(
     private var reader: BufferedReader? = null
     private val dispatcher = Dispatchers.IO
 
+    @Synchronized
     fun start() {
         if (process?.isAlive == true) return
         if (!engineFile.canExecute()) engineFile.setExecutable(true)
         val pb = ProcessBuilder(engineFile.absolutePath)
+        android.util.Log.i("Ucci", "start ${engineFile.absolutePath} nnue=${nnueFile?.exists()}")
         if (nnueFile != null) pb.environment()["PIKAFISH_NNUE"] = nnueFile.absolutePath
         pb.redirectErrorStream(true)
-        val proc = pb.start()
+        val proc = try { pb.start() } catch (t: Throwable) {
+            android.util.Log.e("Ucci", "start failed", t); return
+        }
         process = proc
         writer = OutputStreamWriter(proc.outputStream, Charsets.UTF_8)
         reader = BufferedReader(InputStreamReader(proc.inputStream, Charsets.UTF_8))
-        send("uci")
-        waitFor("uciok")
+        send("ucci")
+        if (!waitFor("ucciok", 6000)) { send("uci"); waitFor("uciok", 4000) }
         send("setoption name Threads value $threads")
         send("setoption name Hash value $hashMb")
         send("isready")
-        waitFor("readyok")
+        waitFor("readyok", 6000)
+        android.util.Log.i("Ucci", "ready")
     }
 
     fun send(cmd: String) {
-        writer?.write(cmd + "\n"); writer?.flush()
+        try { writer?.write(cmd + "\n"); writer?.flush() } catch (_: Throwable) {}
     }
 
-    private fun waitFor(token: String, timeoutMs: Long = 15000) {
+    private fun waitFor(token: String, timeoutMs: Long): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             val line = reader?.readLine() ?: break
-            if (line.contains(token)) return
+            if (line.contains(token)) return true
         }
+        return false
     }
 
-    /** Analyze the given FEN; returns parsed bestmove/score. Run off main thread. */
+    @Synchronized
     fun analyze(fen: String, movetimeMs: Int = 1000, depth: Int? = null): EngineResult {
         var bestmove = ""
         var score: Int? = null
@@ -101,11 +105,9 @@ class UcciEngine(
         CoroutineScope(dispatcher).async { analyze(fen, movetimeMs) }
 
     fun stop() {
-        try {
-            send("quit")
-            process?.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)
-        } catch (_: Exception) {
-        } finally {
+        try { send("quit"); process?.waitFor(3, java.util.concurrent.TimeUnit.SECONDS) }
+        catch (_: Throwable) {}
+        finally {
             process?.destroy()
             process = null; writer = null; reader = null
         }

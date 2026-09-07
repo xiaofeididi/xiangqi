@@ -8,9 +8,9 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
-/** Result entry from the opening book. */
+/** 云库开局库条目 */
 data class BookMove(
-    val move: String,            // ICCS
+    val move: String,
     val winCount: Long = 0,
     val drawCount: Long = 0,
     val lossCount: Long = 0,
@@ -19,10 +19,7 @@ data class BookMove(
     val winRate: Double get() = if (games == 0L) 0.0 else winCount.toDouble() / games
 }
 
-/**
- * Client for the public Xiangqi opening book (chessdb.cn).
- * API: action=queryall&board=<FEN>  -> lines like "move:a0a1 win:5 draw:1 loss:0"
- */
+/** chessdb.cn 云库客户端：action=queryall&board=<FEN> */
 class CloudBook(private val baseUrl: String = "http://www.chessdb.cn/cdb.php") {
 
     suspend fun query(fen: String, timeoutMs: Int = 6000): List<BookMove> =
@@ -57,10 +54,10 @@ class CloudBook(private val baseUrl: String = "http://www.chessdb.cn/cdb.php") {
 
     fun renderTop(moves: List<BookMove>, pos: Position, limit: Int = 3): String {
         val top = moves.sortedByDescending { it.winRate }.take(limit)
-        if (top.isEmpty()) return "云库无数据"
+        if (top.isEmpty()) return "云库无此局面数据"
         return top.joinToString("\n") {
             val cn = Notation.moveToChinese(pos, it.move)
-            "$cn 胜率${(it.winRate * 100).toInt()}%(${it.games}盘)"
+            "$cn  胜率${(it.winRate * 100).toInt()}%（${it.games}局）"
         }
     }
 }
