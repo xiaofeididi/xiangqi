@@ -27,7 +27,9 @@ jobs:
 
       - name: Build debug APK
         working-directory: android
-        run: ./gradlew --no-daemon clean assembleDebug
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon clean assembleDebug
 
       - name: Resolve release version
         if: startsWith(github.ref, 'refs/tags/v')
