@@ -121,8 +121,8 @@ class MainActivity : AppCompatActivity() {
 
         menus.addView(item("新局") { newGame() })
         menus.addView(item("悔棋") { undo() })
-        menus.addView(item("红方分析") { analyzeFor("w") })
-        menus.addView(item("黑方分析") { analyzeFor("b") })
+        menus.addView(item("分析当前方") { analyzeFor(controller.sideToMove) })
+        menus.addView(item("分析对方") { analyzeFor(if (controller.sideToMove == "w") "b" else "w") })
         analyzeButton = item("开始分析") { toggleAnalysisMode() }
         menus.addView(analyzeButton)
         menus.addView(item("立即出招") { playBestNow() })
@@ -228,6 +228,7 @@ class MainActivity : AppCompatActivity() {
             if (controller.tryHumanMove(from.fromRank, from.fromFile, rank, file)) {
                 refreshUi()
                 setStatus("你走了 ${lastChinese()}\n${statusText()}")
+                if (bottomTab == TAB_CLOUD) queryCloud()
                 maybeAutoMove()
             } else {
                 setStatus("这步不合法")
@@ -270,6 +271,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 renderEnginePanel(result, live = analysisMode)
                 refreshUi()
+                if (bottomTab == TAB_CLOUD) queryCloud()
                 if (analysisMode) continueAnalysis()
             }
         }
@@ -284,7 +286,8 @@ class MainActivity : AppCompatActivity() {
             toast("当前正在分析")
             return
         }
-        val fen = controller.fen
+        // 分析指定方：把 FEN 的行棋方改成目标方，其余不动
+        val fen = controller.fen.split(' ').toMutableList().apply { this[1] = side }.joinToString(" ")
         setStatus("${sideName(side)}分析中…")
         lifecycleScope.launch(Dispatchers.IO) {
             val result = requestEngine(fen, side)
@@ -519,14 +522,41 @@ class MainActivity : AppCompatActivity() {
         if (result.bestmove.isNotBlank()) {
             lines += "最佳：${result.chinese(controller.pos)}  [${result.bestmove}]"
         }
-        lines += "评分：${result.scoreText()} · 深度：${result.depth}"
-        if (result.pv.isNotEmpty()) lines += "线路：${result.pv.take(5).joinToString(" ")}"
+        lines += "评分：${scoreForRed(result)} · 深度：${result.depth} 层"
+        val pvCn = pvChinese(result)
+        if (pvCn.isNotBlank()) lines += "变化：$pvCn"
         lines += "设置：${timeText()} · ${depthText()} · ${if (engineReady) "皮卡鱼" else "未启动"}"
         analysisPanel.text = lines.joinToString("\n")
     }
 
     private fun formatResult(result: EngineResult): String =
-        "深度 ${result.depth} · 评分 ${result.scoreText()}"
+        "深度 ${result.depth} 层 · ${scoreForRed(result)}"
+
+    /** 评分统一换算为红方视角，和官方皮卡鱼界面一致 */
+    private fun scoreForRed(result: EngineResult): String {
+        val sign = if (controller.sideToMove == "w") 1 else -1
+        result.mateIn?.let { m ->
+            val n = m * sign
+            return if (n > 0) "红方 ${kotlin.math.abs(n)} 步杀" else "黑方 ${kotlin.math.abs(n)} 步杀"
+        }
+        val cp = result.scoreCp ?: return "暂无评分"
+        val pawns = (cp * sign) / 100.0
+        val who = if (pawns >= 0) "红优" else "黑优"
+        return "$who ${String.format("%.2f", kotlin.math.abs(pawns))}"
+    }
+
+    /** 把引擎 PV 线路逐手翻译成中文着法，如：炮八平五 马8进7 … */
+    private fun pvChinese(result: EngineResult): String {
+        if (result.pv.isEmpty()) return ""
+        val pos = controller.pos.copy()
+        val out = StringBuilder()
+        result.pv.take(8).forEach { iccs ->
+            val cn = try { Notation.moveToChinese(pos, iccs) } catch (_: Throwable) { iccs }
+            out.append(cn).append("  ")
+            try { pos.applyIccs(iccs) } catch (_: Throwable) { return out.toString().trim() }
+        }
+        return out.toString().trim()
+    }
 
     private fun lastChinese(): String {
         val pre = controller.lastPreMove ?: controller.pos
