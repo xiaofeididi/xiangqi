@@ -53,6 +53,7 @@ class BoardView @JvmOverloads constructor(
 
     private var cell = 0f
     private var pad = 0f
+    private var boardHeight = 0f
 
     private fun pos(): Position = controller?.pos ?: Position.fromStartpos()
 
@@ -80,6 +81,7 @@ class BoardView @JvmOverloads constructor(
         val vPad = height * 0.05f
         cell = minOf((width - 2 * hPad) / 8f, (height - 2 * vPad) / 9f)
         pad = minOf(hPad, vPad)
+        boardHeight = cell * 9
     }
 
     private fun gridX(file: Int, left: Float): Float = left + file * cell
@@ -88,7 +90,7 @@ class BoardView @JvmOverloads constructor(
 
     private fun drawGrid(canvas: Canvas, top: Float, left: Float) {
         val right = left + 8 * cell
-        val bottom = top + 9 * cell
+        val bottom = top + boardHeight
         for (r in 0..9) {
             val y = top + r * cell
             if (r == 0 || r == 9) canvas.drawLine(left, y, right, y, thickPaint)
@@ -184,6 +186,7 @@ class BoardView @JvmOverloads constructor(
         if (event.actionMasked != MotionEvent.ACTION_UP) return true
         val x = event.x - pad
         val y = event.y - pad
+        if (x < -cell * 0.5f || y < -cell * 0.5f || x > 8.5f * cell || y > boardHeight + cell * 0.5f) return true
         val file = kotlin.math.round(x / cell).toInt()
         val srank = kotlin.math.round(y / cell).toInt()
         if (file in 0..8 && srank in 0..9) {
