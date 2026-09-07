@@ -3,111 +3,182 @@ package com.xqassist.game
 import com.xqassist.core.Position
 import com.xqassist.core.Quad
 
-/** 人机对练的棋盘状态机：局面、走子、悔棋、提示 */
+/** 棋局状态机：对弈、悔棋、提示、编辑、FEN 导入导出 */
 class GameController {
 
     var pos: Position = Position.fromStartpos()
         private set
     private val history = ArrayDeque<Position>()
+    private val moveHistory = ArrayDeque<Quad>()
+
     var lastMove: Quad? = null
         private set
-    /** 最近一步走子之前的局面，用于中文记谱 */
     var lastPreMove: Position? = null
         private set
     var hintMove: Quad? = null
 
-    /** 人类执子方："w" 红先行(默认)、"b" 黑 */
+    /** 编辑模式关闭时才允许正常走子 */
+    var editMode = false
+    /** 编辑时棋盘残留选中棋子，再次点击空点移动；点相同格子取消 */
+    var editPiece: String? = null
+    /** 删除模式：点击棋子清除 */
+    var editErase = false
+
     var humanSide: String = "w"
-
-    /** 每走一步后是否自动由引擎回招 */
     var autoReply: Boolean = true
-
     var thinking: Boolean = false
 
     val sideToMove: String get() = pos.sideToMove
-
+    val fen: String get() = pos.toFen()
     val isGameOver: Boolean get() = winner() != null
 
-    /** 通过将/帅是否仍存在判定胜负；返回 "w"/"b"/null */
     fun winner(): String? {
         var redKing = false
         var blackKing = false
-        for (r in 0..9) for (f in 0..8) {
-            when (pos.pieceAt(r, f)) {
+        for (rank in 0..9) for (file in 0..8) {
+            when (pos.pieceAt(rank, file)) {
                 "wk" -> redKing = true
                 "bk" -> blackKing = true
             }
         }
-        if (!blackKing) return "w"
-        if (!redKing) return "b"
-        return null
+        return when {
+            !blackKing -> "w"
+            !redKing -> "b"
+            else -> null
+        }
     }
 
     fun newGame() {
-        pos = Position.fromStartpos()
-        history.clear()
-        lastMove = null
-        lastPreMove = null
-        hintMove = null
+        importFen(Position.START_FEN)
     }
 
-    fun canMove(side: String): Boolean = !isGameOver && pos.sideToMove == side
+    fun canMove(side: String) = !editMode && !isGameOver && sideToMove == side
 
-    /** 尝试人类走子；合法并走子成功返回 true */
     fun tryHumanMove(fromRank: Int, fromFile: Int, toRank: Int, toFile: Int): Boolean {
-        if (pos.sideToMove != humanSide) return false
+        if (editMode || !canMove(humanSide)) return false
         val piece = pos.pieceAt(fromRank, fromFile) ?: return false
-        if (piece[0].toString() != humanSide) return false
+        if (piece.first().toString() != humanSide) return false
         if (!Rules.isLegal(pos, fromRank, fromFile, toRank, toFile)) return false
         applyMove(fromRank, fromFile, toRank, toFile)
         return true
     }
 
-    /** 引擎/内部直接落子（仍校验走法合法性） */
     fun applyEngineMove(iccs: String): Boolean {
-        val m = Regex("([a-i])([0-9])([a-i])([0-9])").matchEntire(iccs.lowercase()) ?: return false
-        val ff = Position.FILE_NAMES.indexOf(m.groupValues[1])
-        val fr = m.groupValues[2].toInt()
-        val tf = Position.FILE_NAMES.indexOf(m.groupValues[3])
-        val tr = m.groupValues[4].toInt()
-        if (!Rules.isLegal(pos, fr, ff, tr, tf)) return false
-        applyMove(fr, ff, tr, tf)
+        if (editMode || iccs.isBlank()) return false
+        val match = Regex("([a-i])([0-9])([a-i])([0-9])").matchEntire(iccs.trim().lowercase()) ?: return false
+        val fromFile = Position.FILE_NAMES.indexOf(match.groupValues[1])
+        val fromRank = match.groupValues[2].digitToInt()
+        val toFile = Position.FILE_NAMES.indexOf(match.groupValues[3])
+        val toRank = match.groupValues[4].digitToInt()
+        if (!Rules.isLegal(pos, fromRank, fromFile, toRank, toFile)) return false
+        applyMove(fromRank, fromFile, toRank, toFile)
         return true
     }
 
     fun applyMove(fromRank: Int, fromFile: Int, toRank: Int, toFile: Int) {
-        val preMove = pos.copy()
-        history.addLast(preMove)
-        pos.applyIccs(Quad(fromRank, fromFile, toRank, toFile).iccs())
-        lastMove = Quad(fromRank, fromFile, toRank, toFile)
-        lastPreMove = preMove
+        history.addLast(pos.copy())
+        val move = Quad(fromRank, fromFile, toRank, toFile)
+        pos.applyIccs(move.iccs())
+        moveHistory.addLast(move)
+        lastMove = move
+        lastPreMove = history.last()
         hintMove = null
     }
 
-    /** 悔棋：回退到轮到人类行棋的那一手；返回回退的步数 */
-    fun undo(): Int {
-        var steps = 0
-        while (history.isNotEmpty()) {
-            pos = history.removeLast()
-            steps++
-            if (pos.sideToMove == humanSide) break
-        }
-        if (steps > 0) {
-            lastMove = null
-            lastPreMove = null
-            hintMove = null
-        }
-        return steps
+    fun undo(): Boolean {
+        if (history.isEmpty()) return false
+        pos = history.removeLast()
+        moveHistory.removeLastOrNull()
+        lastMove = moveHistory.lastOrNull()
+        lastPreMove = history.lastOrNull()
+        hintMove = null
+        return true
     }
 
     fun hintFromIccs(iccs: String) {
-        val m = Regex("([a-i])([0-9])([a-i])([0-9])").matchEntire(iccs.lowercase()) ?: return
-        val ff = Position.FILE_NAMES.indexOf(m.groupValues[1])
-        val fr = m.groupValues[2].toInt()
-        val tf = Position.FILE_NAMES.indexOf(m.groupValues[3])
-        val tr = m.groupValues[4].toInt()
-        hintMove = Quad(fr, ff, tr, tf)
+        val match = Regex("([a-i])([0-9])([a-i])([0-9])").matchEntire(iccs.trim().lowercase()) ?: return
+        val fromFile = Position.FILE_NAMES.indexOf(match.groupValues[1])
+        val fromRank = match.groupValues[2].digitToInt()
+        val toFile = Position.FILE_NAMES.indexOf(match.groupValues[3])
+        val toRank = match.groupValues[4].digitToInt()
+        hintMove = Quad(fromRank, fromFile, toRank, toFile)
     }
 
-    fun clearHint() { hintMove = null }
+    fun clearHint() {
+        hintMove = null
+    }
+
+    fun importFen(value: String): Boolean {
+        val clean = value.trim().removePrefix("FEN:").trim()
+        return try {
+            pos = Position.fromFen(clean)
+            history.clear()
+            moveHistory.clear()
+            lastMove = null
+            lastPreMove = null
+            hintMove = null
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    fun exportFen(): String = pos.toFen()
+
+    fun startEditMode() {
+        editMode = true
+        selectedInternal = null
+    }
+
+    fun exitEditMode() {
+        editMode = false
+        editPiece = null
+        editErase = false
+        selectedInternal = null
+    }
+
+    private var selectedInternal: Quad? = null
+    var selected: Quad? = null
+        private set
+
+    fun select(rank: Int, file: Int) {
+        selected = Quad(rank, file, rank, file)
+    }
+
+    fun clearSelection() {
+        selected = null
+    }
+
+    fun editTap(rank: Int, file: Int): String {
+        if (editErase) {
+            val removed = pos.pieceAt(rank, file)
+            pos.setPiece(rank, file, null)
+            return if (removed == null) "该位置没有棋子" else "已删除棋子"
+        }
+        val selectedPiece = editPiece
+        if (selectedPiece == null) {
+            val piece = pos.pieceAt(rank, file)
+            if (piece == null) return "空点：请先选择要放的棋子"
+            editPiece = piece
+            return "已选中 ${pieceText(piece)}，点击目标格"
+        }
+        pos.setPiece(rank, file, selectedPiece)
+        editPiece = null
+        return "已放置棋子"
+    }
+
+    fun clearBoard() {
+        for (rank in 0..9) for (file in 0..8) pos.setPiece(rank, file, null)
+    }
+
+    fun setSideToMove(side: String) {
+        if (side in setOf("w", "b")) pos.sideToMove = side
+    }
+
+    fun pieceText(piece: String): String {
+        val red = mapOf('r' to "车", 'n' to "马", 'b' to "相", 'a' to "仕", 'k' to "帅", 'c' to "炮", 'p' to "兵")
+        val black = mapOf('r' to "车", 'n' to "马", 'b' to "象", 'a' to "士", 'k' to "将", 'c' to "炮", 'p' to "卒")
+        val names = if (piece.first() == 'w') red else black
+        return names[piece[1]] ?: piece
+    }
 }

@@ -7,6 +7,8 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -19,7 +21,6 @@ import com.xqassist.core.Quad
 import com.xqassist.engine.CloudBook
 import com.xqassist.engine.EngineInstaller
 import com.xqassist.engine.EngineResult
-import com.xqassist.engine.FallbackEngine
 import com.xqassist.engine.UcciEngine
 import com.xqassist.game.GameController
 import com.xqassist.ui.BoardView
@@ -29,299 +30,485 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-/** 本地人机对练主页面：新局/悔棋/皮卡鱼提示/云库/设置，棋盘自绘并显示最优连线 */
+/** 皮卡鱼象棋助手：对弈、持续分析、红黑方分析、翻转、FEN 编辑、云库切换 */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var controller: GameController
     private lateinit var board: BoardView
     private lateinit var status: TextView
+    private lateinit var analysisPanel: TextView
+    private lateinit var engineTab: Button
+    private lateinit var cloudTab: Button
+    private lateinit var analyzeButton: Button
     private lateinit var titleView: TextView
+
     private var engine: UcciEngine? = null
-    private var fallbackEngine: FallbackEngine? = null
-    private var engineReady = false
     private val engineMutex = Mutex()
     private val cloudBook = CloudBook()
-    private var thinking = false
-    private var selected: Quad? = null
+    private var engineReady = false
+    private var analysisMode = false
+    private var analysisSide = ""
+    private var bottomTab = TAB_ENGINE
+    private var lastResult = EngineResult()
+
     private var thinkMs = 1000
+    private var searchDepth = 0
+    private var flipped = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         controller = GameController()
         buildUi()
-        refreshBoard()
-        setStatus("正在启动引擎…")
+        refreshUi()
+        setStatus("正在启动皮卡鱼…")
         lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val file = EngineInstaller.install(this@MainActivity)
-                if (file != null) {
-                    val e = UcciEngine(file, EngineInstaller.nnueFile(this@MainActivity), 2, 128)
-                    e.start()
-                    if (e.isReady) {
-                        engine = e
-                        fallbackEngine = null
-                        engineReady = true
-                        android.util.Log.i(TAG, "Pikafish ready")
-                    } else {
-                        e.stop()
-                        android.util.Log.w(TAG, "Pikafish not ready, using fallback")
-                    }
-                }
-            } catch (t: Throwable) {
-                android.util.Log.e(TAG, "Pikafish startup failed", t)
+            val file = EngineInstaller.install(this@MainActivity)
+            if (file == null) {
+                postStatus("皮卡鱼文件缺失")
+                return@launch
             }
-
-            if (!engineReady) {
-                fallbackEngine = FallbackEngine()
-                engineReady = true
-            }
+            val installed = UcciEngine(file, EngineInstaller.nnueFile(this@MainActivity), 2, 128)
+            installed.start()
             withContext(Dispatchers.Main) {
-                setStatus(if (engine != null) "皮卡鱼已就绪，红方先行" else "内置引擎已就绪，红方先行")
-                maybeAiMove()
+                engine = installed
+                engineReady = installed.isReady
+                setStatus(if (engineReady) "皮卡鱼就绪，红方先行" else "皮卡鱼启动失败，请查看日志")
+                maybeAutoMove()
             }
         }
     }
 
     private fun buildUi() {
         val density = resources.displayMetrics.density
+        fun dp(value: Float) = (value * density).toInt()
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(0xF5, 0xF0, 0xE4))
-            setPadding((14 * density).toInt(), (10 * density).toInt(), (14 * density).toInt(), (10 * density).toInt())
+            setBackgroundColor(Color.parseColor("#F7F1E5"))
+            setPadding(dp(14), dp(8), dp(14), dp(10))
         }
 
         titleView = TextView(this).apply {
-            text = "皮卡鱼 · 本地对练"
+            text = "皮卡鱼象棋助手"
             textSize = 20f
             setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.rgb(0x33, 0x22, 0x11))
+            setTextColor(Color.parseColor("#3A2A1A"))
             gravity = Gravity.CENTER
-            setPadding(0, (6 * density).toInt(), 0, (8 * density).toInt())
+            setPadding(0, dp(6), 0, dp(6))
         }
 
-        val bar = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        }
-        val barRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-
-        fun menuButton(text: String, action: () -> Unit): Button =
-            Button(this).apply {
-                this.text = text
-                isAllCaps = false
-                setPadding((12 * density).toInt(), (4 * density).toInt(), (12 * density).toInt(), (4 * density).toInt())
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { marginEnd = (8 * density).toInt() }
-                setOnClickListener { action() }
+        val menuBar = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
+        val menus = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        fun item(label: String, action: () -> Unit): Button = Button(this).apply {
+            text = label
+            isAllCaps = false
+            textSize = 13f
+            setPadding(dp(10), dp(2), dp(10), dp(2))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginEnd = dp(7)
             }
+            setOnClickListener { action() }
+        }
 
-        barRow.addView(menuButton("新局") { newGame() })
-        barRow.addView(menuButton("悔棋") { undoMove() })
-        barRow.addView(menuButton("皮卡鱼") { askHint() })
-        barRow.addView(menuButton("云库") { queryCloud() })
-        barRow.addView(menuButton("设置") { showSettings() })
-        bar.addView(barRow)
+        menus.addView(item("新局") { newGame() })
+        menus.addView(item("悔棋") { undo() })
+        menus.addView(item("红方分析") { analyzeFor("w") })
+        menus.addView(item("黑方分析") { analyzeFor("b") })
+        analyzeButton = item("开始分析") { toggleAnalysisMode() }
+        menus.addView(analyzeButton)
+        menus.addView(item("立即出招") { playBestNow() })
+        menus.addView(item("翻转") { flipped = !flipped; refreshUi() })
+        menus.addView(item("编辑") { editDialog() })
+        menus.addView(item("设置") { settingsDialog() })
+        menuBar.addView(menus)
 
         board = BoardView(this).apply {
             controller = this@MainActivity.controller
             listener = { rank, file -> onBoardTap(rank, file) }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
-            ).apply { setMargins(0, (6 * density).toInt(), 0, (6 * density).toInt()) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.92f).apply {
+                setMargins(0, dp(4), 0, dp(4))
+            }
+        }
+
+        val tabs = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(Color.parseColor("#E9D9BC"))
+            setPadding(dp(6), dp(3), dp(6), dp(3))
+        }
+        engineTab = bottomTabButton("皮卡鱼") { switchTab(TAB_ENGINE) }
+        cloudTab = bottomTabButton("云库") { switchTab(TAB_CLOUD) }
+        tabs.addView(engineTab)
+        tabs.addView(cloudTab)
+
+        analysisPanel = TextView(this).apply {
+            textSize = 13f
+            setTextColor(Color.parseColor("#3F3125"))
+            setPadding(dp(8), dp(7), dp(8), dp(7))
+            setBackgroundColor(Color.parseColor("#FFF8E7"))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.28f)
+            movementMethod = null
         }
 
         status = TextView(this).apply {
-            text = "请走子"
-            textSize = 14f
-            setTextColor(Color.rgb(0x44, 0x33, 0x22))
-            setPadding((8 * density).toInt(), (8 * density).toInt(), (8 * density).toInt(), (8 * density).toInt())
-            setBackgroundColor(Color.rgb(0xFF, 0xFA, 0xEC))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            )
+            textSize = 12f
+            setTextColor(Color.parseColor("#6B543D"))
+            setPadding(dp(8), dp(2), dp(8), dp(4))
+            setSingleLine(false)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
         root.addView(titleView)
-        root.addView(bar)
+        root.addView(menuBar)
         root.addView(board)
+        root.addView(tabs)
+        root.addView(analysisPanel)
         root.addView(status)
         setContentView(root)
+        switchTab(TAB_ENGINE)
+    }
+
+    private fun bottomTabButton(label: String, action: () -> Unit): Button = Button(this).apply {
+        text = label
+        isAllCaps = false
+        textSize = 12f
+        setPadding(0, 0, 0, 0)
+        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        setOnClickListener { action() }
+    }
+
+    private fun switchTab(tab: Int) {
+        bottomTab = tab
+        if (tab == TAB_ENGINE) {
+            engineTab.setBackgroundColor(Color.parseColor("#D7B98A"))
+            cloudTab.setBackgroundColor(Color.parseColor("#F0E7D6"))
+            renderEnginePanel(lastResult, live = analysisMode)
+        } else {
+            engineTab.setBackgroundColor(Color.parseColor("#F0E7D6"))
+            cloudTab.setBackgroundColor(Color.parseColor("#D7B98A"))
+            analysisPanel.text = "云库加载中…"
+            queryCloud()
+        }
     }
 
     private fun onBoardTap(rank: Int, file: Int) {
-        val sel = selected
-        if (sel != null && (sel.fromRank != rank || sel.fromFile != file)) {
-            val ok = controller.tryHumanMove(sel.fromRank, sel.fromFile, rank, file)
-            selected = null
-            if (ok) {
-                refreshBoard()
-                val moveText = controller.lastMove?.let {
-                    Notation.moveToChinese(controller.lastPreMove ?: controller.pos, it.iccs())
-                } ?: ""
-                setStatus("你走了 $moveText\n${if (controller.isGameOver) "对局结束" else "皮卡鱼思考中…"}")
-                maybeAiMove()
-                return
+        if (controller.editMode) {
+            setStatus(controller.editTap(rank, file))
+            refreshUi()
+            return
+        }
+
+        val selected = controller.selected
+        if (selected != null && (selected.fromRank != rank || selected.fromFile != file)) {
+            val from = selected
+            controller.clearSelection()
+            if (controller.tryHumanMove(from.fromRank, from.fromFile, rank, file)) {
+                refreshUi()
+                setStatus("你走了 ${lastChinese()}\n${statusText()}")
+                maybeAutoMove()
+            } else {
+                setStatus("这步不合法")
+                refreshUi()
             }
-            Toast.makeText(this, "这步不合法", Toast.LENGTH_SHORT).show()
-            refreshBoard()
             return
         }
 
         val piece = controller.pos.pieceAt(rank, file)
-        if (piece != null && piece[0].toString() == controller.humanSide && controller.canMove(controller.humanSide)) {
-            selected = Quad(rank, file, rank, file)
+        if (piece != null && piece.first().toString() == controller.humanSide && controller.canMove(controller.humanSide)) {
+            controller.select(rank, file)
         } else {
-            selected = null
+            controller.clearSelection()
         }
-        refreshBoard()
+        refreshUi()
     }
 
-    private fun maybeAiMove() {
-        if (!engineReady || !controller.autoReply || thinking || controller.isGameOver) return
+    private fun maybeAutoMove() {
+        if (!engineReady || !controller.autoReply || controller.thinking || controller.isGameOver) return
         val aiSide = if (controller.humanSide == "w") "b" else "w"
         if (controller.sideToMove != aiSide) return
-        thinking = true
+        analyzeAndMove(aiSide)
+    }
+
+    private fun analyzeAndMove(side: String) {
         controller.thinking = true
-        refreshBoard()
-        val fen = controller.pos.toFen()
+        setStatus("${sideName(side)}思考中…")
+        refreshUi()
+        val fen = controller.fen
         lifecycleScope.launch(Dispatchers.IO) {
-            val result = analyzeNow(fen, thinkMs)
+            val result = requestEngine(fen, side)
             withContext(Dispatchers.Main) {
-                thinking = false
                 controller.thinking = false
                 val applied = controller.applyEngineMove(result.bestmove)
+                lastResult = result
                 if (applied) {
-                    val cn = controller.lastMove?.let {
-                        Notation.moveToChinese(controller.lastPreMove ?: controller.pos, it.iccs())
-                    } ?: ""
-                    setStatus("${if (engine != null) "皮卡鱼" else "内置引擎"}走了 $cn\n${formatEngineResult(result)}\n${gameStatusText()}")
+                    setStatus("${sideName(side)}走了 ${lastChinese()}\n${formatResult(result)}\n${statusText()}")
                 } else {
-                    setStatus(gameStatusText() + "\n引擎着法无效：${result.bestmove}")
+                    setStatus("引擎着法无效：${result.bestmove.ifBlank { "空" }}")
                 }
-                refreshBoard()
+                renderEnginePanel(result, live = analysisMode)
+                refreshUi()
+                if (analysisMode) continueAnalysis()
             }
         }
     }
 
-    private fun askHint() {
-        if (!engineReady || thinking || controller.isGameOver) {
-            Toast.makeText(this, "引擎还未就绪", Toast.LENGTH_SHORT).show()
+    private fun analyzeFor(side: String) {
+        if (!engineReady) {
+            toast("皮卡鱼还没就绪")
             return
         }
-        if (thinking || controller.isGameOver) return
-        thinking = true
-        setStatus("正在请求皮卡鱼连线…")
-        val fen = controller.pos.toFen()
+        if (controller.thinking) {
+            toast("当前正在分析")
+            return
+        }
+        val fen = controller.fen
+        setStatus("${sideName(side)}分析中…")
         lifecycleScope.launch(Dispatchers.IO) {
-            val result = analyzeNow(fen, thinkMs)
+            val result = requestEngine(fen, side)
             withContext(Dispatchers.Main) {
-                thinking = false
+                lastResult = result
                 controller.hintFromIccs(result.bestmove)
-                setStatus("${if (engine != null) "皮卡鱼" else "内置引擎"}建议：${result.chinese(controller.pos)}\n${formatEngineResult(result)}")
-                refreshBoard()
+                setStatus("${sideName(side)}建议：${result.chinese(controller.pos)}\n${formatResult(result)}")
+                renderEnginePanel(result, live = false)
+                refreshUi()
             }
         }
+    }
+
+    private fun toggleAnalysisMode() {
+        if (analysisMode) {
+            analysisMode = false
+            analysisSide = ""
+            analyzeButton.text = "开始分析"
+            sendStop()
+            setStatus("持续分析已停止")
+            return
+        }
+        if (!engineReady) {
+            toast("皮卡鱼还没就绪")
+            return
+        }
+        analysisMode = true
+        analysisSide = controller.sideToMove
+        analyzeButton.text = "停止分析"
+        setStatus("持续分析中：${sideName(analysisSide)}")
+        continueAnalysis()
+    }
+
+    private fun continueAnalysis() {
+        if (!analysisMode || controller.thinking) return
+        val fen = controller.fen
+        lifecycleScope.launch(Dispatchers.IO) {
+            val result = requestEngine(fen, analysisSide)
+            withContext(Dispatchers.Main) {
+                lastResult = result
+                renderEnginePanel(result, live = true)
+                if (analysisMode) {
+                    controller.hintFromIccs(result.bestmove)
+                    refreshUi()
+                }
+            }
+        }
+    }
+
+    private fun playBestNow() {
+        if (!engineReady || controller.thinking || controller.isGameOver) {
+            toast("当前不能出招")
+            return
+        }
+        analyzeAndMove(controller.sideToMove)
+    }
+
+    private suspend fun requestEngine(fen: String, side: String): EngineResult = engineMutex.withLock {
+        val current = engine ?: return@withLock EngineResult()
+        if (!current.isReady || fen != controller.fen) return@withLock EngineResult()
+        current.analyze(
+            fen,
+            movetimeMs = thinkMs,
+            depth = searchDepth,
+            onInfo = { partial ->
+                runOnUiThread {
+                    if (bottomTab == TAB_ENGINE) renderEnginePanel(partial, live = true)
+                }
+            },
+        )
+    }
+
+    private fun sendStop() {
+        lifecycleScope.launch(Dispatchers.IO) { engine?.send("stop") }
     }
 
     private fun queryCloud() {
-        val fen = controller.pos.toFen()
-        setStatus("正在查询云库…")
-        lifecycleScope.launch {
-            try {
-                val moves = cloudBook.query(fen)
-                setStatus(cloudBook.renderTop(moves, controller.pos))
-            } catch (t: Throwable) {
-                setStatus("云库查询失败：${t.message ?: t.javaClass.simpleName}")
+        val fen = controller.fen
+        lifecycleScope.launch(Dispatchers.IO) {
+            val result = cloudBook.query(fen)
+            withContext(Dispatchers.Main) {
+                if (bottomTab != TAB_CLOUD) return@withContext
+                analysisPanel.text = when (result) {
+                    is CloudBook.Result.Moves -> cloudBook.renderTop(result.list, controller.pos)
+                    is CloudBook.Result.Error -> result.message
+                }
             }
         }
     }
 
-    private fun undoMove() {
-        val n = controller.undo()
-        if (n == 0) {
-            Toast.makeText(this, "没有可悔的棋", Toast.LENGTH_SHORT).show()
-        }
-        selected = null
-        refreshBoard()
-        setStatus("已悔棋\n${gameStatusText()}")
-        maybeAiMove()
+    private fun editDialog() {
+        val options = arrayOf("进入编辑模式", "选红子", "选黑子", "删除模式 开/关", "清空棋盘", "红方行棋", "黑方行棋", "导入 FEN", "导出 FEN", "完成编辑")
+        AlertDialog.Builder(this).setTitle("编辑棋局").setItems(options) { _, which ->
+            when (which) {
+                0 -> { controller.startEditMode(); setStatus("编辑模式：先选棋子，再点棋盘放置") }
+                1 -> { selectEditPiece("w") }
+                2 -> { selectEditPiece("b") }
+                3 -> { controller.editErase = !controller.editErase; setStatus(if (controller.editErase) "删除模式开启" else "删除模式关闭") }
+                4 -> { controller.clearBoard(); setStatus("已清空棋盘") }
+                5 -> { controller.setSideToMove("w"); setStatus("已设为红方行棋") }
+                6 -> { controller.setSideToMove("b"); setStatus("已设为黑方行棋") }
+                7 -> importFenDialog()
+                8 -> exportFenDialog()
+                9 -> { controller.exitEditMode(); setStatus("编辑完成\n${statusText()}") }
+            }
+            refreshUi()
+        }.show()
+    }
+
+    private fun selectEditPiece(side: String) {
+        val names = if (side == "w") arrayOf("帅", "仕", "相", "马", "车", "炮", "兵") else arrayOf("将", "士", "象", "马", "车", "炮", "卒")
+        val types = arrayOf("k", "a", "b", "n", "r", "c", "p")
+        AlertDialog.Builder(this).setTitle(if (side == "w") "选择红子" else "选择黑子").setItems(names) { _, which ->
+            controller.editPiece = side + types[which]
+            setStatus("已选择${controller.pieceText(controller.editPiece!!)}，点击棋盘放置")
+        }.show()
+    }
+
+    private fun importFenDialog() {
+        val input = EditText(this).apply { setText(controller.exportFen()) }
+        AlertDialog.Builder(this).setTitle("导入 FEN").setView(input).setPositiveButton("导入") { _, _ ->
+            val ok = controller.importFen(input.text.toString())
+            setStatus(if (ok) "FEN 导入成功" else "FEN 格式错误")
+            refreshUi()
+        }.setNegativeButton("取消", null).show()
+    }
+
+    private fun exportFenDialog() {
+        val input = EditText(this).apply { setText(controller.exportFen()); setSelection(text.length) }
+        AlertDialog.Builder(this).setTitle("导出 FEN").setView(input)
+            .setPositiveButton("复制") { _, _ -> copyText(controller.exportFen()); toast("已复制 FEN") }
+            .setNegativeButton("关闭", null).show()
+    }
+
+    private fun settingsDialog() {
+        val timeLabels = arrayOf("0.5 秒", "1 秒", "2 秒", "5 秒", "10 秒")
+        val timeValues = intArrayOf(500, 1000, 2000, 5000, 10000)
+        val depthLabels = arrayOf("不限", "6 层", "8 层", "10 层", "12 层")
+        val depthValues = intArrayOf(0, 6, 8, 10, 12)
+        val options = arrayOf(
+            "切换执子", "AI 回招：${if (controller.autoReply) "开" else "关"}",
+            "思考时间：当前 ${thinkMs}ms", "搜索深度：当前 ${if (searchDepth == 0) "不限" else searchDepth.toString()}",
+        )
+        AlertDialog.Builder(this).setTitle("设置").setItems(options) { _, which ->
+            when (which) {
+                0 -> { controller.humanSide = if (controller.humanSide == "w") "b" else "w"; newGame() }
+                1 -> controller.autoReply = !controller.autoReply
+                2 -> AlertDialog.Builder(this).setTitle("思考时间").setItems(timeLabels) { _, ti -> thinkMs = timeValues[ti] }.show()
+                3 -> AlertDialog.Builder(this).setTitle("搜索深度").setItems(depthLabels) { _, di -> searchDepth = depthValues[di] }.show()
+            }
+            refreshUi()
+        }.show()
     }
 
     private fun newGame() {
         controller.newGame()
-        selected = null
-        refreshBoard()
-        setStatus("新局开始，${if (controller.humanSide == "w") "你执红" else "你执黑"}\n${gameStatusText()}")
-        maybeAiMove()
+        analysisMode = false
+        analyzeButton.text = "开始分析"
+        setStatus("新局开始，${if (controller.humanSide == "w") "红方" else "黑方"}先行")
+        refreshUi()
+        maybeAutoMove()
     }
 
-    private fun showSettings() {
-        val items = arrayOf("切换执子", "AI 回招：开", "AI 回招：关", "思考 0.5s", "思考 1s", "思考 2s")
-        AlertDialog.Builder(this)
-            .setTitle("设置")
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> {
-                        controller.humanSide = if (controller.humanSide == "w") "b" else "w"
-                        newGame()
-                    }
-                    1 -> { controller.autoReply = true; setStatus("已开启 AI 回招") }
-                    2 -> { controller.autoReply = false; setStatus("已关闭 AI 回招") }
-                    3 -> { thinkMs = 500; setStatus("思考时间 0.5 秒") }
-                    4 -> { thinkMs = 1000; setStatus("思考时间 1 秒") }
-                    5 -> { thinkMs = 2000; setStatus("思考时间 2 秒") }
-                }
-            }
-            .show()
+    private fun undo() {
+        if (!controller.undo()) toast("没有可悔的棋")
+        selectedClear()
+        refreshUi()
+        setStatus("已悔棋\n${statusText()}")
+        maybeAutoMove()
     }
 
-    private fun formatEngineResult(r: EngineResult): String {
-        val score = when {
-            r.mateIn != null -> "杀棋 ${r.mateIn}"
-            r.scoreCp != null -> (r.scoreCp / 100.0).let { String.format("%.2f 兵", it) }
-            else -> "无评分"
-        }
-        return "深度 ${r.depth} · 评分 $score"
+    private fun selectedClear() {
+        controller.clearSelection()
     }
 
-    private suspend fun analyzeNow(fen: String, thinkMs: Int): EngineResult =
-        engineMutex.withLock {
-            withContext(Dispatchers.IO) {
-                val external = engine
-                if (external != null) external.analyze(fen, thinkMs)
-                else fallbackEngine?.analyze(controller.pos) ?: EngineResult()
-            }
-        }
-
-    private fun gameStatusText(): String {
-        val side = if (controller.sideToMove == "w") "红方" else "黑方"
-        return when (val w = controller.winner()) {
-            "w" -> "红方胜"
-            "b" -> "黑方胜"
-            else -> "轮到 $side"
-        }
-    }
-
-    private fun refreshBoard() {
+    private fun refreshUi() {
         board.controller = controller
-        board.selected = selected
+        board.selected = controller.selected
+        board.flipped = flipped
         board.invalidate()
     }
+
+    private fun renderEnginePanel(result: EngineResult, live: Boolean) {
+        lastResult = result
+        if (bottomTab != TAB_ENGINE) return
+        val lines = mutableListOf(if (live) "持续分析中…" else "皮卡鱼建议")
+        if (result.bestmove.isNotBlank()) {
+            lines += "最佳：${result.chinese(controller.pos)}  [${result.bestmove}]"
+        }
+        lines += "评分：${result.scoreText()} · 深度：${result.depth}"
+        if (result.pv.isNotEmpty()) lines += "线路：${result.pv.take(5).joinToString(" ")}"
+        lines += "设置：${timeText()} · ${depthText()} · ${if (engineReady) "皮卡鱼" else "未启动"}"
+        analysisPanel.text = lines.joinToString("\n")
+    }
+
+    private fun formatResult(result: EngineResult): String =
+        "深度 ${result.depth} · 评分 ${result.scoreText()}"
+
+    private fun lastChinese(): String {
+        val pre = controller.lastPreMove ?: controller.pos
+        val move = controller.lastMove ?: return ""
+        return Notation.moveToChinese(pre, move.iccs())
+    }
+
+    private fun statusText(): String = when (val winner = controller.winner()) {
+        "w" -> "红方胜"
+        "b" -> "黑方胜"
+        else -> "轮到${sideName(controller.sideToMove)}"
+    }
+
+    private fun sideName(side: String): String = if (side == "w") "红方" else "黑方"
+
+    private fun timeText(): String = when (thinkMs) {
+        500 -> "0.5 秒"
+        2000 -> "2 秒"
+        5000 -> "5 秒"
+        10000 -> "10 秒"
+        else -> "1 秒"
+    }
+
+    private fun depthText(): String = if (searchDepth == 0) "不限深度" else "$searchDepth 层"
 
     private fun setStatus(text: String) {
         status.text = text
     }
 
-    companion object {
-        private const val TAG = "XqAssist"
+    private fun postStatus(text: String) {
+        runOnUiThread { setStatus(text) }
+    }
+
+    private fun toast(text: String) {
+        Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun copyText(value: String) {
+        val clipboard = getSystemService(android.content.ClipboardManager::class.java)
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("FEN", value))
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        analysisMode = false
         engine?.stop()
         engine = null
+    }
+
+    companion object {
+        private const val TAB_ENGINE = 0
+        private const val TAB_CLOUD = 1
     }
 }
