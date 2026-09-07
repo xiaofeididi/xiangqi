@@ -1,0 +1,66 @@
+name: Release APK
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew --no-daemon clean assembleDebug
+
+      - name: Resolve release version
+        if: startsWith(github.ref, 'refs/tags/v')
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve snapshot version
+        if: github.ref == 'refs/heads/main'
+        id: snapshot
+        run: echo "version=v0.1.0-snapshot" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: xq-assist ${{ steps.version.outputs.version }}
+          body: |
+            自动构建的中国象棋助手 APK。
+
+            - 本地人机对练
+            - 皮卡鱼最优着法连线提示
+            - 云库开局查询
+          files: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Create snapshot Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.snapshot.outputs.version }}
+          name: xq-assist 最新测试版
+          body: |
+            这是 main 分支的最新自动构建。
+
+            正式版本发布后，请优先下载正式 Release。
+          files: android/app/build/outputs/apk/debug/app-debug.apk
