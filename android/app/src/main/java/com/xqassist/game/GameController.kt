@@ -25,7 +25,7 @@ class GameController {
     var editErase = false
 
     var humanSide: String = "w"
-    var autoReply: Boolean = true
+    var autoReply: Boolean = false
     var thinking: Boolean = false
 
     val sideToMove: String get() = pos.sideToMove
@@ -54,10 +54,11 @@ class GameController {
 
     fun canMove(side: String) = !editMode && !isGameOver && sideToMove == side
 
+    /** 走子：轮到哪方就走哪方，红黑都可手动走 */
     fun tryHumanMove(fromRank: Int, fromFile: Int, toRank: Int, toFile: Int): Boolean {
-        if (editMode || !canMove(humanSide)) return false
+        if (editMode || isGameOver) return false
         val piece = pos.pieceAt(fromRank, fromFile) ?: return false
-        if (piece.first().toString() != humanSide) return false
+        if (piece.first().toString() != pos.sideToMove) return false
         if (!Rules.isLegal(pos, fromRank, fromFile, toRank, toFile)) return false
         applyMove(fromRank, fromFile, toRank, toFile)
         return true

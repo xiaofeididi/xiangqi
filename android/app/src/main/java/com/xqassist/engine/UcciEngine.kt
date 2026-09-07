@@ -38,14 +38,23 @@ class UcciEngine(
     /** UI/调试日志回调 */
     var logger: ((String) -> Unit)? = null
 
+    /** 握手/运行日志缓存，供界面直接展示排错 */
+    val logBuffer = ArrayDeque<String>()
+
     private var process: Process? = null
     private var writer: OutputStreamWriter? = null
     private var reader: BufferedReader? = null
 
     private fun log(message: String) {
         android.util.Log.i("Ucci", message)
+        synchronized(logBuffer) {
+            logBuffer.addLast(message)
+            while (logBuffer.size > 40) logBuffer.removeFirst()
+        }
         logger?.invoke(message)
     }
+
+    fun recentLog(): String = synchronized(logBuffer) { logBuffer.joinToString("\n") }
 
     @Synchronized
     fun start(): Boolean {
@@ -67,11 +76,11 @@ class UcciEngine(
         writer = OutputStreamWriter(started.outputStream, Charsets.UTF_8)
         reader = BufferedReader(InputStreamReader(started.inputStream, Charsets.UTF_8))
 
-        send("ucci")
-        val ucciOk = waitFor("ucciok", 8000)
-        if (!ucciOk) {
-            send("uci")
-            waitFor("uciok", 5000)
+        send("uci")
+        val uciOk = waitFor("uciok", 8000)
+        if (!uciOk) {
+            send("ucci")
+            waitFor("ucciok", 5000)
         }
         send("setoption name Threads value ${threads.coerceIn(1, 8)}")
         send("setoption name Hash value ${hashMb.coerceIn(16, 512)}")

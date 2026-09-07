@@ -36,7 +36,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var controller: GameController
     private lateinit var board: BoardView
     private lateinit var status: TextView
+    private lateinit var panelHolder: LinearLayout
     private lateinit var analysisPanel: TextView
+    private lateinit var cloudPanel: LinearLayout
     private lateinit var engineTab: Button
     private lateinit var cloudTab: Button
     private lateinit var analyzeButton: Button
@@ -46,6 +48,7 @@ class MainActivity : AppCompatActivity() {
     private val engineMutex = Mutex()
     private val cloudBook = CloudBook()
     private var engineReady = false
+    private val cloudMoves = java.util.Collections.synchronizedList(mutableListOf<com.xqassist.engine.BookMove>())
     private var analysisMode = false
     private var analysisSide = ""
     private var bottomTab = TAB_ENGINE
@@ -72,7 +75,13 @@ class MainActivity : AppCompatActivity() {
             withContext(Dispatchers.Main) {
                 engine = installed
                 engineReady = installed.isReady
-                setStatus(if (engineReady) "皮卡鱼就绪，红方先行" else "皮卡鱼启动失败，请查看日志")
+                if (engineReady) {
+                    setStatus("皮卡鱼就绪，红方先行")
+                } else {
+                    val logTail = installed.recentLog().lines().takeLast(12).joinToString("\n")
+                    setStatus("皮卡鱼启动失败（详见下方面板）")
+                    analysisPanel.text = "【皮卡鱼启动日志】\n" + logTail.ifBlank { "（无输出：进程可能未能启动）" }
+                }
                 maybeAutoMove()
             }
         }
@@ -140,14 +149,25 @@ class MainActivity : AppCompatActivity() {
         tabs.addView(engineTab)
         tabs.addView(cloudTab)
 
+        panelHolder = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#FFF8E7"))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.28f)
+        }
         analysisPanel = TextView(this).apply {
             textSize = 13f
             setTextColor(Color.parseColor("#3F3125"))
             setPadding(dp(8), dp(7), dp(8), dp(7))
-            setBackgroundColor(Color.parseColor("#FFF8E7"))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.28f)
-            movementMethod = null
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         }
+        cloudPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        }
+        panelHolder.addView(analysisPanel)
+        panelHolder.addView(cloudPanel)
 
         status = TextView(this).apply {
             textSize = 12f
@@ -161,7 +181,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(menuBar)
         root.addView(board)
         root.addView(tabs)
-        root.addView(analysisPanel)
+        root.addView(panelHolder)
         root.addView(status)
         setContentView(root)
         switchTab(TAB_ENGINE)
@@ -181,11 +201,15 @@ class MainActivity : AppCompatActivity() {
         if (tab == TAB_ENGINE) {
             engineTab.setBackgroundColor(Color.parseColor("#D7B98A"))
             cloudTab.setBackgroundColor(Color.parseColor("#F0E7D6"))
+            analysisPanel.visibility = View.VISIBLE
+            cloudPanel.visibility = View.GONE
             renderEnginePanel(lastResult, live = analysisMode)
         } else {
             engineTab.setBackgroundColor(Color.parseColor("#F0E7D6"))
             cloudTab.setBackgroundColor(Color.parseColor("#D7B98A"))
-            analysisPanel.text = "云库加载中…"
+            analysisPanel.visibility = View.GONE
+            cloudPanel.visibility = View.VISIBLE
+            renderCloudPanel(listOf())
             queryCloud()
         }
     }
@@ -213,7 +237,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val piece = controller.pos.pieceAt(rank, file)
-        if (piece != null && piece.first().toString() == controller.humanSide && controller.canMove(controller.humanSide)) {
+        if (piece != null && piece.first().toString() == controller.sideToMove && controller.canMove(controller.sideToMove)) {
             controller.select(rank, file)
         } else {
             controller.clearSelection()
@@ -345,11 +369,54 @@ class MainActivity : AppCompatActivity() {
             val result = cloudBook.query(fen)
             withContext(Dispatchers.Main) {
                 if (bottomTab != TAB_CLOUD) return@withContext
-                analysisPanel.text = when (result) {
-                    is CloudBook.Result.Moves -> cloudBook.renderTop(result.list, controller.pos)
-                    is CloudBook.Result.Error -> result.message
+                when (result) {
+                    is CloudBook.Result.Moves -> {
+                        cloudMoves.clear()
+                        cloudMoves.addAll(result.list)
+                        renderCloudPanel(result.list)
+                    }
+                    is CloudBook.Result.Error -> renderCloudError(result.message)
                 }
             }
+        }
+    }
+
+    /** 云库招法列表：点击某条直接走该步 */
+    private fun renderCloudPanel(moves: List<com.xqassist.engine.BookMove>) {
+        cloudPanel.removeAllViews()
+        if (moves.isEmpty()) {
+            cloudPanel.addView(TextView(this).apply { text = "云库无此局面数据"; textSize = 13f })
+            return
+        }
+        val top = moves.sortedWith(compareByDescending<com.xqassist.engine.BookMove> { it.rank }.thenByDescending { it.score }).take(8)
+        top.forEachIndexed { index, m ->
+            val cn = Notation.moveToChinese(controller.pos, m.move)
+            val btn = Button(this).apply {
+                text = "${index + 1}. $cn  分${m.score}  胜率${String.format("%.1f", m.winrate)}%"
+                isAllCaps = false
+                textSize = 13f
+                gravity = Gravity.START
+                setOnClickListener { playCloudMove(m.move) }
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            }
+            cloudPanel.addView(btn)
+        }
+    }
+
+    private fun renderCloudError(message: String) {
+        cloudPanel.removeAllViews()
+        cloudPanel.addView(TextView(this).apply { text = message; textSize = 13f })
+    }
+
+    private fun playCloudMove(iccs: String) {
+        if (controller.editMode || controller.isGameOver) return
+        val before = controller.pos.copy()
+        if (controller.applyEngineMove(iccs)) {
+            status.text = "云库走子：${Notation.moveToChinese(before, iccs)}\n${statusText()}"
+            refreshUi()
+            maybeAutoMove()
+        } else {
+            toast("这步不合法：$iccs")
         }
     }
 
