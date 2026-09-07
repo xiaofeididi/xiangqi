@@ -80,7 +80,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildUi() {
         val density = resources.displayMetrics.density
-        fun dp(value: Float) = (value * density).toInt()
+        fun dp(value: Int) = (value * density).toInt()
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
