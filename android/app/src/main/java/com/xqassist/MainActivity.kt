@@ -297,15 +297,17 @@ class MainActivity : AppCompatActivity() {
     private fun continueAnalysis() {
         if (!analysisMode || controller.thinking) return
         val fen = controller.fen
+        val side = controller.sideToMove
         lifecycleScope.launch(Dispatchers.IO) {
-            val result = requestEngine(fen, analysisSide)
+            val result = requestEngine(fen, side)
             withContext(Dispatchers.Main) {
                 lastResult = result
                 renderEnginePanel(result, live = true)
-                if (analysisMode) {
+                if (analysisMode && result.bestmove.isNotBlank()) {
                     controller.hintFromIccs(result.bestmove)
                     refreshUi()
                 }
+                if (analysisMode) continueAnalysis()
             }
         }
     }
