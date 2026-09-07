@@ -14,6 +14,8 @@ data class EngineResult(
     val mateIn: Int? = null,
     val depth: Int = 0,
     val pv: List<String> = emptyList(),
+    val timeMs: Long = 0,
+    val analyzedSide: String = "",
 ) {
     fun chinese(pos: Position): String =
         if (bestmove.isBlank()) "无着法" else Notation.moveToChinese(pos, bestmove)
@@ -147,6 +149,8 @@ class UcciEngine(
         log("分析开始：$go")
         send(go)
 
+        val startedAt = System.currentTimeMillis()
+        val analyzedSide = Regex("\\s([wb])\\s").find(fen)?.groupValues?.get(1) ?: "w"
         val limitMs = when {
             depth > 0 -> maxOf(20000L, movetimeMs * 4L + 5000L)
             else -> movetimeMs + 5000L
@@ -183,7 +187,8 @@ class UcciEngine(
         }
 
         val finalBest = best.ifBlank { currentPv.firstOrNull() ?: "" }
-        return EngineResult(finalBest, score, mate, currentDepth, currentPv.toList())
+        val elapsed = System.currentTimeMillis() - startedAt
+        return EngineResult(finalBest, score, mate, currentDepth, currentPv.toList(), elapsed, analyzedSide)
     }
 
     @Synchronized

@@ -518,15 +518,21 @@ class MainActivity : AppCompatActivity() {
     private fun renderEnginePanel(result: EngineResult, live: Boolean) {
         lastResult = result
         if (bottomTab != TAB_ENGINE) return
-        val lines = mutableListOf(if (live) "持续分析中…" else "皮卡鱼建议")
-        if (result.bestmove.isNotBlank()) {
-            lines += "最佳：${result.chinese(controller.pos)}  [${result.bestmove}]"
+        if (!engineReady) return
+        if (result.bestmove.isBlank()) {
+            analysisPanel.text = if (live) "皮卡鱼持续分析中…" else "引擎状态：就绪 · 等待分析"
+            return
         }
-        lines += "评分：${scoreForRed(result)} · 深度：${result.depth} 层"
+        val thinkSec = if (result.timeMs > 0) String.format("%.1f 秒", result.timeMs / 1000.0) else timeText()
+        val lines = mutableListOf<String>()
+        lines += "最佳着法：${result.chinese(controller.pos)}  （${result.bestmove}）"
+        lines += "评分：${scoreForRed(result)}    深度：${result.depth} 层    耗时：$thinkSec"
         val pvCn = pvChinese(result)
-        if (pvCn.isNotBlank()) lines += "变化：$pvCn"
-        lines += "设置：${timeText()} · ${depthText()} · ${if (engineReady) "皮卡鱼" else "未启动"}"
+        if (pvCn.isNotBlank()) lines += "主要变化：$pvCn"
+        lines += if (live) "持续分析中 · ${sideName(result.analyzedSide)}视角" else "引擎：皮卡鱼 · ${timeText()} · ${depthText()}"
         analysisPanel.text = lines.joinToString("\n")
+        // 提示箭头默认常显
+        controller.hintFromIccs(result.bestmove)
     }
 
     private fun formatResult(result: EngineResult): String =
@@ -534,7 +540,7 @@ class MainActivity : AppCompatActivity() {
 
     /** 评分统一换算为红方视角，和官方皮卡鱼界面一致 */
     private fun scoreForRed(result: EngineResult): String {
-        val sign = if (controller.sideToMove == "w") 1 else -1
+        val sign = if (result.analyzedSide.ifBlank { controller.sideToMove } == "w") 1 else -1
         result.mateIn?.let { m ->
             val n = m * sign
             return if (n > 0) "红方 ${kotlin.math.abs(n)} 步杀" else "黑方 ${kotlin.math.abs(n)} 步杀"
