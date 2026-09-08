@@ -163,8 +163,9 @@ class UcciEngine(
         send("position fen $fen")
         val go = when {
             infinite -> "go infinite"
+            depth > 0 && movetimeMs > 0 -> "go depth $depth movetime ${movetimeMs.coerceAtLeast(100)}"
             depth > 0 -> "go depth $depth"
-            else -> "go movetime ${movetimeMs.coerceIn(100, 30000)}"
+            else -> "go movetime ${movetimeMs.coerceAtLeast(100)}"
         }
         log("分析开始：$go")
         send(go)
@@ -239,10 +240,6 @@ class UcciEngine(
 
     @Synchronized
     fun stop() {
-        try {
-            send("stop")
-        } catch (_: Throwable) {
-        }
         try {
             send("quit")
             process?.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
