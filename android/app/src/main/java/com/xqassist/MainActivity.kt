@@ -240,8 +240,8 @@ class MainActivity : AppCompatActivity() {
         pages.addView(settingsScroll)
 
         root.addView(toolbar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)))
-        root.addView(navBar)
         root.addView(board)
+        root.addView(navBar)
         root.addView(tabBar)
         root.addView(pages)
         setContentView(root)
