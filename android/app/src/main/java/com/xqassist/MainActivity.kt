@@ -218,7 +218,7 @@ class MainActivity : AppCompatActivity() {
 
         buildEnginePage(dp)
         buildOpeningPage(dp)
-        buildSettingsPage(dp)
+        buildSettingsPage { value -> (value * resources.displayMetrics.density).toInt() }
 
         val pages = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
