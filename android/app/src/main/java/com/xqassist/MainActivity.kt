@@ -247,6 +247,8 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        controls.addView(actionButton("分析红方") { analyzeFor("w") })
+        controls.addView(actionButton("分析黑方") { analyzeFor("b") })
         controls.addView(check("显示云库", displayCloud) { _, value -> displayCloud = value; if (value) queryCloud() })
         controls.addView(check("执行云库", executeCloud) { _, value -> executeCloud = value })
         enginePage.addView(controls)
@@ -459,6 +461,7 @@ class MainActivity : AppCompatActivity() {
         renderInfo()
         if (displayCloud) queryCloud()
         maybeAutoMove()
+        if (analysisMode && !controller.thinking) continueAnalysis()
     }
 
     private fun setEngineSide(side: String) {
