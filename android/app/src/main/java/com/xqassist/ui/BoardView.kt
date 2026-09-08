@@ -23,6 +23,7 @@ class BoardView @JvmOverloads constructor(
 
     var controller: GameController? = null
     var flipped: Boolean = false
+    var mirrored: Boolean = false
     var selected: Quad? = null
     var listener: ((rank: Int, file: Int) -> Unit)? = null
 
@@ -43,7 +44,7 @@ class BoardView @JvmOverloads constructor(
         color = Color.rgb(0xE6, 0x7E, 0x22); strokeWidth = 5f * density; style = Paint.Style.STROKE
     }
     private val hintPaint = Paint().apply {
-        color = Color.rgb(0x2E, 0x9E, 0x2E); strokeWidth = 7f * density
+        color = Color.argb(220, 0x2E, 0x9E, 0x2E); strokeWidth = 7f * density
         strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; style = Paint.Style.STROKE
     }
     private val riverPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -74,6 +75,7 @@ class BoardView @JvmOverloads constructor(
 
         drawMarkers(canvas, top, left)
         drawPieces(canvas, top, left)
+        drawHint(canvas, top, left)
     }
 
     private fun computeMetrics() {
@@ -84,9 +86,10 @@ class BoardView @JvmOverloads constructor(
         boardHeight = cell * 9
     }
 
-    private fun gridX(file: Int, left: Float): Float = left + file * cell
+    private fun gridX(file: Int, left: Float): Float = left + screenFile(file) * cell
     private fun gridY(rank: Int, top: Float): Float = top + screenRank(rank) * cell
     private fun screenRank(rank: Int): Int = if (flipped) 9 - rank else rank
+    private fun screenFile(file: Int): Int = if (mirrored) 8 - file else file
 
     private fun drawGrid(canvas: Canvas, top: Float, left: Float) {
         val right = left + 8 * cell
@@ -124,12 +127,15 @@ class BoardView @JvmOverloads constructor(
         if (sel != null) {
             mark(canvas, gridX(sel.fromFile, left), gridY(sel.fromRank, top), selPaint)
         }
-        val hint = m.hintMove
-        if (hint != null) {
-            drawHintArrow(canvas,
-                gridX(hint.fromFile, left), gridY(hint.fromRank, top),
-                gridX(hint.toFile, left), gridY(hint.toRank, top))
-        }
+    }
+
+    /** 提示箭头画在棋子之上，避免被棋子遮住（对齐网页版效果） */
+    private fun drawHint(canvas: Canvas, top: Float, left: Float) {
+        val m = controller ?: return
+        val hint = m.hintMove ?: return
+        drawHintArrow(canvas,
+            gridX(hint.fromFile, left), gridY(hint.fromRank, top),
+            gridX(hint.toFile, left), gridY(hint.toRank, top))
     }
 
     private fun mark(canvas: Canvas, x: Float, y: Float, paint: Paint) {
@@ -187,8 +193,9 @@ class BoardView @JvmOverloads constructor(
         val x = event.x - pad
         val y = event.y - pad
         if (x < -cell * 0.5f || y < -cell * 0.5f || x > 8.5f * cell || y > boardHeight + cell * 0.5f) return true
-        val file = kotlin.math.round(x / cell).toInt()
+        var file = kotlin.math.round(x / cell).toInt()
         val srank = kotlin.math.round(y / cell).toInt()
+        if (mirrored) file = 8 - file
         if (file in 0..8 && srank in 0..9) {
             val rank = if (flipped) 9 - srank else srank
             listener?.invoke(rank, file)

@@ -38,6 +38,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var panelHolder: LinearLayout
     private lateinit var analysisPanel: TextView
+    private lateinit var candidatePanel: LinearLayout
+    private lateinit var engineContainer: LinearLayout
     private lateinit var cloudPanel: LinearLayout
     private lateinit var engineTab: Button
     private lateinit var cloudTab: Button
@@ -56,6 +58,7 @@ class MainActivity : AppCompatActivity() {
 
     private var thinkMs = 1000
     private var searchDepth = 0
+    private var multiPv = 3
     private var flipped = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -154,19 +157,30 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(Color.parseColor("#FFF8E7"))
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.28f)
         }
+        engineContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        }
         analysisPanel = TextView(this).apply {
             textSize = 13f
             setTextColor(Color.parseColor("#3F3125"))
-            setPadding(dp(8), dp(7), dp(8), dp(7))
+            setPadding(dp(8), dp(7), dp(8), dp(2))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        candidatePanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), 0, dp(8), dp(6))
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         }
+        engineContainer.addView(analysisPanel)
+        engineContainer.addView(candidatePanel)
         cloudPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(8), dp(4), dp(8), dp(4))
             visibility = View.GONE
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         }
-        panelHolder.addView(analysisPanel)
+        panelHolder.addView(engineContainer)
         panelHolder.addView(cloudPanel)
 
         status = TextView(this).apply {
@@ -201,13 +215,13 @@ class MainActivity : AppCompatActivity() {
         if (tab == TAB_ENGINE) {
             engineTab.setBackgroundColor(Color.parseColor("#D7B98A"))
             cloudTab.setBackgroundColor(Color.parseColor("#F0E7D6"))
-            analysisPanel.visibility = View.VISIBLE
+            engineContainer.visibility = View.VISIBLE
             cloudPanel.visibility = View.GONE
             renderEnginePanel(lastResult, live = analysisMode)
         } else {
             engineTab.setBackgroundColor(Color.parseColor("#F0E7D6"))
             cloudTab.setBackgroundColor(Color.parseColor("#D7B98A"))
-            analysisPanel.visibility = View.GONE
+            engineContainer.visibility = View.GONE
             cloudPanel.visibility = View.VISIBLE
             renderCloudPanel(listOf())
             queryCloud()
@@ -354,6 +368,7 @@ class MainActivity : AppCompatActivity() {
             fen,
             movetimeMs = thinkMs,
             depth = searchDepth,
+            multiPv = multiPv,
             onInfo = { partial ->
                 runOnUiThread {
                     if (bottomTab == TAB_ENGINE) renderEnginePanel(partial, live = true)
@@ -475,6 +490,7 @@ class MainActivity : AppCompatActivity() {
         val options = arrayOf(
             "切换执子", "AI 回招：${if (controller.autoReply) "开" else "关"}",
             "思考时间：当前 ${thinkMs}ms", "搜索深度：当前 ${if (searchDepth == 0) "不限" else searchDepth.toString()}",
+            "候选着法数：当前 $multiPv",
         )
         AlertDialog.Builder(this).setTitle("设置").setItems(options) { _, which ->
             when (which) {
@@ -482,6 +498,7 @@ class MainActivity : AppCompatActivity() {
                 1 -> controller.autoReply = !controller.autoReply
                 2 -> AlertDialog.Builder(this).setTitle("思考时间").setItems(timeLabels) { _, ti -> thinkMs = timeValues[ti] }.show()
                 3 -> AlertDialog.Builder(this).setTitle("搜索深度").setItems(depthLabels) { _, di -> searchDepth = depthValues[di] }.show()
+                4 -> AlertDialog.Builder(this).setTitle("候选着法数").setItems(arrayOf("1", "2", "3", "4", "5")) { _, mi -> multiPv = mi + 1 }.show()
             }
             refreshUi()
         }.show()
@@ -517,6 +534,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderEnginePanel(result: EngineResult, live: Boolean) {
         lastResult = result
+        candidatePanel.removeAllViews()
         if (bottomTab != TAB_ENGINE) return
         if (!engineReady) return
         if (result.bestmove.isBlank()) {
@@ -533,23 +551,45 @@ class MainActivity : AppCompatActivity() {
         analysisPanel.text = lines.joinToString("\n")
         // 提示箭头默认常显
         controller.hintFromIccs(result.bestmove)
+
+        // 网页版式候选着法列表：点击某条只看该条提示线
+        result.lines.take(5).forEachIndexed { i, ln ->
+            val cn = try { Notation.moveToChinese(controller.pos, ln.move) } catch (_: Throwable) { ln.move }
+            val row = TextView(this).apply {
+                text = "${i + 1}. $cn    ${scoreTextFor(result.analyzedSide, ln.mateIn, ln.scoreCp)}    深度 ${ln.depth}"
+                textSize = 13f
+                val first = i == 0
+                setTextColor(if (first) Color.parseColor("#1B5E20") else Color.parseColor("#5D4037"))
+                if (first) setTypeface(typeface, Typeface.BOLD)
+                setPadding(0, 6, 0, 6)
+                setOnClickListener {
+                    controller.hintFromIccs(ln.move)
+                    refreshUi()
+                    setStatus("候选 ${i + 1}：$cn")
+                }
+            }
+            candidatePanel.addView(row)
+        }
     }
 
     private fun formatResult(result: EngineResult): String =
         "深度 ${result.depth} 层 · ${scoreForRed(result)}"
 
     /** 评分统一换算为红方视角，和官方皮卡鱼界面一致 */
-    private fun scoreForRed(result: EngineResult): String {
-        val sign = if (result.analyzedSide.ifBlank { controller.sideToMove } == "w") 1 else -1
-        result.mateIn?.let { m ->
+    private fun scoreTextFor(analyzedSide: String, mate: Int?, cp: Int?): String {
+        val sign = if (analyzedSide.ifBlank { controller.sideToMove } == "w") 1 else -1
+        mate?.let { m ->
             val n = m * sign
             return if (n > 0) "红方 ${kotlin.math.abs(n)} 步杀" else "黑方 ${kotlin.math.abs(n)} 步杀"
         }
-        val cp = result.scoreCp ?: return "暂无评分"
-        val pawns = (cp * sign) / 100.0
+        val value = cp ?: return "暂无评分"
+        val pawns = (value * sign) / 100.0
         val who = if (pawns >= 0) "红优" else "黑优"
         return "$who ${String.format("%.2f", kotlin.math.abs(pawns))}"
     }
+
+    private fun scoreForRed(result: EngineResult): String =
+        scoreTextFor(result.analyzedSide, result.mateIn, result.scoreCp)
 
     /** 把引擎 PV 线路逐手翻译成中文着法，如：炮八平五 马8进7 … */
     private fun pvChinese(result: EngineResult): String {

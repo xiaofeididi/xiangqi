@@ -8,6 +8,15 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 
 /** 皮卡鱼返回的一次完整分析结果 */
+/** MultiPV 排名表中的一条候选着法 */
+data class PvLine(
+    val move: String,
+    val scoreCp: Int?,
+    val mateIn: Int?,
+    val depth: Int,
+    val pv: List<String> = emptyList(),
+)
+
 data class EngineResult(
     val bestmove: String = "",
     val scoreCp: Int? = null,
@@ -16,6 +25,8 @@ data class EngineResult(
     val pv: List<String> = emptyList(),
     val timeMs: Long = 0,
     val analyzedSide: String = "",
+    /** MultiPV 候选表，按优劣排序（第一条即 bestmove） */
+    val lines: List<PvLine> = emptyList(),
 ) {
     fun chinese(pos: Position): String =
         if (bestmove.isBlank()) "无着法" else Notation.moveToChinese(pos, bestmove)
@@ -119,13 +130,14 @@ class UcciEngine(
 
     /**
      * 同步分析。depth > 0 时限制深度；movetimeMs > 0 时限制用时。
-     * onInfo 在读取到 info 行时回调，可用于持续刷新。
+     * multiPv > 1 时启用多候选，onInfo 在读取到 info 行时回调，可用于持续刷新。
      */
     @Synchronized
     fun analyze(
         fen: String,
         movetimeMs: Int = 1000,
         depth: Int = 0,
+        multiPv: Int = 1,
         onInfo: ((EngineResult) -> Unit)? = null,
     ): EngineResult {
         if (process?.isAlive != true) {
@@ -138,8 +150,11 @@ class UcciEngine(
         var mate: Int? = null
         var currentDepth = 0
         val currentPv = mutableListOf<String>()
+        // MultiPV：每条候选线以 multipv 名次为键，持续用最新 info 覆盖
+        val lineMap = sortedMapOf<Int, PvLine>()
 
         send("stop")
+        send("setoption name MultiPV value ${multiPv.coerceIn(1, 5)}")
         send("position fen $fen")
         val go = when {
             depth > 0 && movetimeMs > 0 -> "go depth $depth movetime $movetimeMs"
@@ -160,24 +175,35 @@ class UcciEngine(
         while (System.currentTimeMillis() < deadline) {
             val line = reader?.readLine() ?: break
             if (line.startsWith("info")) {
+                val mpvIndex = Regex("(?<= multipv )(\\d+)").find(line)?.groupValues?.get(1)?.toInt() ?: 1
                 Regex("(?<= depth )(\\d+)").find(line)?.let {
                     currentDepth = it.groupValues[1].toInt()
                 }
+                var lineScore: Int? = null
+                var lineMate: Int? = null
                 Regex("score (cp|mate) (-?\\d+)").find(line)?.let { match ->
-                    if (match.groupValues[1] == "cp") {
-                        score = match.groupValues[2].toInt()
-                        mate = null
-                    } else {
-                        mate = match.groupValues[2].toInt()
-                        score = null
-                    }
+                    if (match.groupValues[1] == "cp") lineScore = match.groupValues[2].toInt()
+                    else lineMate = match.groupValues[2].toInt()
                 }
+                val linePv = mutableListOf<String>()
                 Regex(" pv (.+)").find(line)?.let { match ->
-                    currentPv.clear()
-                    currentPv.addAll(match.groupValues[1].trim().split(Regex("\\s+")))
+                    linePv.addAll(match.groupValues[1].trim().split(Regex("\\s+")))
+                }
+                if (mpvIndex == 1) {
+                    if (lineScore != null) { score = lineScore; mate = null }
+                    if (lineMate != null) { mate = lineMate; score = null }
+                    if (linePv.isNotEmpty()) { currentPv.clear(); currentPv.addAll(linePv) }
+                }
+                if (linePv.isNotEmpty()) {
+                    lineMap[mpvIndex] = PvLine(linePv.first(), lineScore, lineMate, currentDepth, linePv.toList())
                 }
                 if (line.contains(" pv ")) {
-                    onInfo?.invoke(EngineResult(currentPv.firstOrNull() ?: "", score, mate, currentDepth, currentPv.toList()))
+                    onInfo?.invoke(
+                        EngineResult(
+                            currentPv.firstOrNull() ?: "", score, mate, currentDepth,
+                            currentPv.toList(), 0, "", lineMap.values.toList(),
+                        ),
+                    )
                 }
             } else if (line.startsWith("bestmove")) {
                 best = line.split(Regex("\\s+")).getOrElse(1) { "" }
@@ -188,7 +214,7 @@ class UcciEngine(
 
         val finalBest = best.ifBlank { currentPv.firstOrNull() ?: "" }
         val elapsed = System.currentTimeMillis() - startedAt
-        return EngineResult(finalBest, score, mate, currentDepth, currentPv.toList(), elapsed, analyzedSide)
+        return EngineResult(finalBest, score, mate, currentDepth, currentPv.toList(), elapsed, analyzedSide, lineMap.values.toList())
     }
 
     @Synchronized

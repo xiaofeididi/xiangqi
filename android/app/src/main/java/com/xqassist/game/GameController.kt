@@ -170,6 +170,7 @@ class GameController {
 
     fun clearBoard() {
         for (rank in 0..9) for (file in 0..8) pos.setPiece(rank, file, null)
+        pos.sideToMove = "w"
     }
 
     fun setSideToMove(side: String) {
