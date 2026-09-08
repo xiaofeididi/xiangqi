@@ -216,9 +216,10 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         }
 
-        buildEnginePage(dp)
-        buildOpeningPage(dp)
-        buildSettingsPage { value -> (value * resources.displayMetrics.density).toInt() }
+        val toPx: (Int) -> Int = { value -> (value * resources.displayMetrics.density).toInt() }
+        buildEnginePage(toPx)
+        buildOpeningPage(toPx)
+        buildSettingsPage(toPx)
 
         val pages = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -241,7 +242,7 @@ class MainActivity : AppCompatActivity() {
         renderInfo()
     }
 
-    private fun buildEnginePage(dp: (Int) -> Int) {
+    private fun buildEnginePage(toPx: (Int) -> Int) {
         val controls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -253,7 +254,7 @@ class MainActivity : AppCompatActivity() {
         val timeRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(3), 0, dp(3))
+            setPadding(0, toPx(3), 0, toPx(3))
         }
         timeRow.addView(TextView(this).apply { text = "思考时间："; textSize = 13f })
         val timeInput = EditText(this).apply {
@@ -278,32 +279,32 @@ class MainActivity : AppCompatActivity() {
         enginePage.addView(switches)
     }
 
-    private fun buildOpeningPage(dp: (Int) -> Int) {
+    private fun buildOpeningPage(toPx: (Int) -> Int) {
         openingPage.removeAllViews()
         val controls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(2), 0, dp(2))
+            setPadding(0, toPx(2), 0, toPx(2))
         }
         controls.addView(check("显示云库", displayCloud) { _, value -> displayCloud = value; if (value) queryCloud() })
         controls.addView(check("执行云库", executeCloud) { _, value -> executeCloud = value })
         openingPage.addView(controls)
     }
 
-    private fun buildSettingsPage(dp: (Int) -> Int) {
+    private fun buildSettingsPage(toPx: (Int) -> Int) {
         settingsPage.removeAllViews()
         val depthLabels = listOf("不限", "6 层", "8 层", "10 层", "12 层", "14 层", "16 层")
         val depthValues = listOf(0, 6, 8, 10, 12, 14, 16)
         val depthRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(3), 0, dp(3))
+            setPadding(0, toPx(3), 0, toPx(3))
         }
         depthRow.addView(TextView(this).apply { text = "搜索深度："; textSize = 13f })
         depthLabels.forEachIndexed { index, label ->
             depthRow.addView(choiceButton(label, depthValues[index] == searchDepth) {
                 searchDepth = depthValues[index]
-                buildSettingsPage(dp)
+                buildSettingsPage(toPx)
             })
         }
         settingsPage.addView(depthRow)
@@ -311,7 +312,7 @@ class MainActivity : AppCompatActivity() {
         val thinkRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(3), 0, dp(3))
+            setPadding(0, toPx(3), 0, toPx(3))
         }
         thinkRow.addView(TextView(this).apply { text = "思考时间："; textSize = 13f })
         val thinkInput = EditText(this).apply {
@@ -328,20 +329,20 @@ class MainActivity : AppCompatActivity() {
         val candidateRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(3), 0, dp(3))
+            setPadding(0, toPx(3), 0, toPx(3))
         }
         candidateRow.addView(TextView(this).apply { text = "候选着法："; textSize = 13f })
         for (count in 1..5) {
             candidateRow.addView(choiceButton("$count", multiPv == count) {
                 multiPv = count
-                buildSettingsPage(dp)
+                buildSettingsPage(toPx)
             })
         }
         settingsPage.addView(candidateRow)
 
         val toggles = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(5), 0, dp(5))
+            setPadding(0, toPx(5), 0, toPx(5))
         }
         toggles.addView(check("后台思考", backgroundThink) { _, value -> backgroundThink = value })
         toggles.addView(check("音效", playSound) { _, value -> playSound = value })
@@ -353,7 +354,7 @@ class MainActivity : AppCompatActivity() {
 
         val actionRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(4), 0, 0)
+            setPadding(0, toPx(4), 0, 0)
         }
         actionRow.addView(actionButton("悔棋") { undo() })
         actionRow.addView(actionButton("悬浮窗") { toggleOverlay() })
