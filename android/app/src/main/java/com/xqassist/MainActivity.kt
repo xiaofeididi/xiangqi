@@ -365,7 +365,8 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun requestEngine(fen: String, side: String): EngineResult = engineMutex.withLock {
         val current = engine ?: return@withLock EngineResult()
-        if (!current.isReady || fen != controller.fen) return@withLock EngineResult()
+        if (!current.isReady) return@withLock EngineResult()
+        if (fen.substringBefore(' ') != controller.fen.substringBefore(' ')) return@withLock EngineResult()
         current.analyze(
             fen,
             movetimeMs = thinkMs,

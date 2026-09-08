@@ -21,9 +21,9 @@ object Notation {
         val m = Regex("([a-i])([0-9])([a-i])([0-9])").matchEntire(move.trim().lowercase())
             ?: return move
         val fromFile = FILE_NAMES.indexOf(m.groupValues[1])
-        val fromRank = m.groupValues[2].toInt()
+        val fromRank = 9 - m.groupValues[2].toInt()
         val toFile = FILE_NAMES.indexOf(m.groupValues[3])
-        val toRank = m.groupValues[4].toInt()
+        val toRank = 9 - m.groupValues[4].toInt()
         if (fromRank !in 0..9 || toRank !in 0..9 || fromFile !in 0..8 || toFile !in 0..8) return move
         val piece = pos.pieceAt(fromRank, fromFile) ?: return move
         val isRed = piece[0] == 'w'

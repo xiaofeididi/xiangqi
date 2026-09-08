@@ -68,9 +68,9 @@ class GameController {
         if (editMode || iccs.isBlank()) return false
         val match = Regex("([a-i])([0-9])([a-i])([0-9])").matchEntire(iccs.trim().lowercase()) ?: return false
         val fromFile = Position.FILE_NAMES.indexOf(match.groupValues[1])
-        val fromRank = match.groupValues[2].toInt()
+        val fromRank = 9 - match.groupValues[2].toInt()
         val toFile = Position.FILE_NAMES.indexOf(match.groupValues[3])
-        val toRank = match.groupValues[4].toInt()
+        val toRank = 9 - match.groupValues[4].toInt()
         if (!Rules.isLegal(pos, fromRank, fromFile, toRank, toFile)) return false
         applyMove(fromRank, fromFile, toRank, toFile)
         return true
@@ -99,9 +99,9 @@ class GameController {
     fun hintFromIccs(iccs: String) {
         val match = Regex("([a-i])([0-9])([a-i])([0-9])").matchEntire(iccs.trim().lowercase()) ?: return
         val fromFile = Position.FILE_NAMES.indexOf(match.groupValues[1])
-        val fromRank = match.groupValues[2].toInt()
+        val fromRank = 9 - match.groupValues[2].toInt()
         val toFile = Position.FILE_NAMES.indexOf(match.groupValues[3])
-        val toRank = match.groupValues[4].toInt()
+        val toRank = 9 - match.groupValues[4].toInt()
         hintMove = Quad(fromRank, fromFile, toRank, toFile)
     }
 

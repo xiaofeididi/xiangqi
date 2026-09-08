@@ -80,9 +80,9 @@ class Position private constructor(
         val m = Regex("([a-i])([0-9])([a-i])([0-9])").matchEntire(move.trim().lowercase())
             ?: throw IllegalArgumentException("bad ICCS move: $move")
         val fromFile = FILE_NAMES.indexOf(m.groupValues[1])
-        val fromRank = m.groupValues[2].toInt()
+        val fromRank = 9 - m.groupValues[2].toInt()
         val toFile = FILE_NAMES.indexOf(m.groupValues[3])
-        val toRank = m.groupValues[4].toInt()
+        val toRank = 9 - m.groupValues[4].toInt()
         val piece = pieceAt(fromRank, fromFile)
             ?: throw IllegalArgumentException("no piece at ${m.groupValues[1]}${m.groupValues[2]} in FEN ${toFen()}")
         setPiece(fromRank, fromFile, null)
@@ -96,9 +96,9 @@ class Position private constructor(
         val m = Regex("([a-i])([0-9])([a-i])([0-9])").matchEntire(move.trim().lowercase())
             ?: return
         val fromFile = FILE_NAMES.indexOf(m.groupValues[1])
-        val fromRank = m.groupValues[2].toInt()
+        val fromRank = 9 - m.groupValues[2].toInt()
         val toFile = FILE_NAMES.indexOf(m.groupValues[3])
-        val toRank = m.groupValues[4].toInt()
+        val toRank = 9 - m.groupValues[4].toInt()
         setPiece(toRank, toFile, capturedPiece)
         setPiece(fromRank, fromFile, restoredPiece)
         sideToMove = if (sideToMove == "w") "b" else "w"
@@ -140,5 +140,5 @@ class Position private constructor(
 data class Coord(val rank: Int, val file: Int)
 data class Quad(val fromRank: Int, val fromFile: Int, val toRank: Int, val toFile: Int) {
     fun iccs(): String =
-        "${Position.FILE_NAMES[fromFile]}$fromRank${Position.FILE_NAMES[toFile]}$toRank"
+        "${Position.FILE_NAMES[fromFile]}${9 - fromRank}${Position.FILE_NAMES[toFile]}${9 - toRank}"
 }
