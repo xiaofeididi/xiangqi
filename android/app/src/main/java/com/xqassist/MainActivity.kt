@@ -319,7 +319,7 @@ class MainActivity : AppCompatActivity() {
             setText((thinkMs / 1000).toString())
             inputType = InputType.TYPE_CLASS_NUMBER
             textSize = 13f
-            layoutParams = LinearLayout.LayoutParams(dp(72), ViewGroup.LayoutParams.WRAP_CONTENT)
+            layoutParams = LinearLayout.LayoutParams(toPx(72), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         thinkInput.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) setThinkSeconds(thinkInput.text.toString()) }
         thinkRow.addView(thinkInput)
