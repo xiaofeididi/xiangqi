@@ -31,6 +31,12 @@ jobs:
           chmod +x gradlew
           ./gradlew --no-daemon clean assembleDebug
 
+      - name: Calculate SHA-256
+        working-directory: android/app/build/outputs/apk/debug
+        id: sha256
+        run: |
+          echo "apk_sha256=$(sha256sum app-debug.apk | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
       - name: Resolve release version
         if: startsWith(github.ref, 'refs/tags/v')
         id: version
@@ -53,6 +59,8 @@ jobs:
             - 本地人机对练
             - 皮卡鱼最优着法连线提示
             - 云库开局查询
+
+            下载说明：请先登录 GitHub 再下载。完整 APK 大小约 57 MB；下载不完整会得到错误页，安装器可能提示 package is null。SHA-256：${{ steps.sha256.outputs.apk_sha256 }}。
           files: android/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Create snapshot Release
