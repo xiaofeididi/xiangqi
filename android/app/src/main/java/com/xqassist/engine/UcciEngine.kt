@@ -7,7 +7,6 @@ import java.io.File
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 
-/** 皮卡鱼返回的一次完整分析结果 */
 /** MultiPV 排名表中的一条候选着法 */
 data class PvLine(
     val move: String,
@@ -15,6 +14,7 @@ data class PvLine(
     val mateIn: Int?,
     val depth: Int,
     val pv: List<String> = emptyList(),
+    val nps: Long = 0,
 )
 
 data class EngineResult(
@@ -27,6 +27,8 @@ data class EngineResult(
     val analyzedSide: String = "",
     /** MultiPV 候选表，按优劣排序（第一条即 bestmove） */
     val lines: List<PvLine> = emptyList(),
+    val nps: Long = 0,
+    val fen: String = "",
 ) {
     fun chinese(pos: Position): String =
         if (bestmove.isBlank()) "无着法" else Notation.moveToChinese(pos, bestmove)
@@ -37,6 +39,8 @@ data class EngineResult(
         else -> "无评分"
     }
 }
+
+/** 皮卡鱼返回的一次完整分析结果 */
 
 /** Pikafish UCI 进程封装；所有分析都应在 IO 线程调用 */
 class UcciEngine(
@@ -181,6 +185,8 @@ class UcciEngine(
                 }
                 var lineScore: Int? = null
                 var lineMate: Int? = null
+                var lineNps = 0L
+                Regex("(?<= nps )(\\d+)").find(line)?.let { lineNps = it.groupValues[1].toLong() }
                 Regex("score (cp|mate) (-?\\d+)").find(line)?.let { match ->
                     if (match.groupValues[1] == "cp") lineScore = match.groupValues[2].toInt()
                     else lineMate = match.groupValues[2].toInt()
@@ -195,13 +201,21 @@ class UcciEngine(
                     if (linePv.isNotEmpty()) { currentPv.clear(); currentPv.addAll(linePv) }
                 }
                 if (linePv.isNotEmpty()) {
-                    lineMap[mpvIndex] = PvLine(linePv.first(), lineScore, lineMate, currentDepth, linePv.toList())
+                    lineMap[mpvIndex] = PvLine(linePv.first(), lineScore, lineMate, currentDepth, linePv.toList(), lineNps)
                 }
                 if (line.contains(" pv ")) {
                     onInfo?.invoke(
                         EngineResult(
-                            currentPv.firstOrNull() ?: "", score, mate, currentDepth,
-                            currentPv.toList(), 0, "", lineMap.values.toList(),
+                            bestmove = currentPv.firstOrNull() ?: "",
+                            scoreCp = score,
+                            mateIn = mate,
+                            depth = currentDepth,
+                            pv = currentPv.toList(),
+                            timeMs = 0,
+                            analyzedSide = analyzedSide,
+                            lines = lineMap.values.toList(),
+                            nps = lineMap[1]?.nps ?: 0,
+                            fen = fen,
                         ),
                     )
                 }
@@ -214,7 +228,18 @@ class UcciEngine(
 
         val finalBest = best.ifBlank { currentPv.firstOrNull() ?: "" }
         val elapsed = System.currentTimeMillis() - startedAt
-        return EngineResult(finalBest, score, mate, currentDepth, currentPv.toList(), elapsed, analyzedSide, lineMap.values.toList())
+        return EngineResult(
+            bestmove = finalBest,
+            scoreCp = score,
+            mateIn = mate,
+            depth = currentDepth,
+            pv = currentPv.toList(),
+            timeMs = elapsed,
+            analyzedSide = analyzedSide,
+            lines = lineMap.values.toList(),
+            nps = lineMap[1]?.nps ?: 0,
+            fen = fen,
+        )
     }
 
     @Synchronized

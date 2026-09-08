@@ -24,6 +24,10 @@ class BoardView @JvmOverloads constructor(
     var controller: GameController? = null
     var flipped: Boolean = false
     var mirrored: Boolean = false
+    /** 是否显示最优着法箭头 */
+    var showArrow: Boolean = true
+    /** 是否画坐标数字 */
+    var showCoords: Boolean = true
     var selected: Quad? = null
     var listener: ((rank: Int, file: Int) -> Unit)? = null
 
@@ -56,7 +60,7 @@ class BoardView @JvmOverloads constructor(
     private var pad = 0f
     private var boardHeight = 0f
 
-    private fun pos(): Position = controller?.pos ?: Position.fromStartpos()
+    private fun pos(): Position = controller?.displayPos ?: Position.fromStartpos()
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
@@ -73,6 +77,7 @@ class BoardView @JvmOverloads constructor(
         canvas.drawText("楚河", left + 2.5f * cell, midY, riverPaint)
         canvas.drawText("汉界", left + 5.5f * cell, midY, riverPaint)
 
+        if (showCoords) drawCoords(canvas, top, left)
         drawMarkers(canvas, top, left)
         drawPieces(canvas, top, left)
         drawHint(canvas, top, left)
@@ -80,7 +85,8 @@ class BoardView @JvmOverloads constructor(
 
     private fun computeMetrics() {
         val hPad = width * 0.05f
-        val vPad = height * 0.05f
+        // 上下预留坐标文字空间，避免 1-9 / 九-一 被裁掉
+        val vPad = height * 0.08f
         cell = minOf((width - 2 * hPad) / 8f, (height - 2 * vPad) / 9f)
         pad = minOf(hPad, vPad)
         boardHeight = cell * 9
@@ -116,9 +122,27 @@ class BoardView @JvmOverloads constructor(
         canvas.drawPath(path, linePaint)
     }
 
+    private val coordPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(0x5A, 0x3A, 0x1A); textAlign = Paint.Align.CENTER
+    }
+
+    /** 棋盘坐标：上方黑方 1-9，下方红方 九-一（随翻转交换） */
+    private fun drawCoords(canvas: Canvas, top: Float, left: Float) {
+        val blackNum = arrayOf("1", "2", "3", "4", "5", "6", "7", "8", "9")
+        val redNum = arrayOf("九", "八", "七", "六", "五", "四", "三", "二", "一")
+        coordPaint.textSize = cell * 0.26f
+        for (sf in 0..8) {
+            val file = if (mirrored) 8 - sf else sf
+            val x = left + sf * cell
+            val topLabel = if (flipped) redNum[file] else blackNum[file]
+            val bottomLabel = if (flipped) blackNum[file] else redNum[file]
+            canvas.drawText(topLabel, x, top - cell * 0.18f, coordPaint)
+            canvas.drawText(bottomLabel, x, top + boardHeight + cell * 0.42f, coordPaint)
+        }
+    }
     private fun drawMarkers(canvas: Canvas, top: Float, left: Float) {
         val m = controller ?: return
-        val last = m.lastMove
+        val last = m.displayLastMove
         if (last != null) {
             mark(canvas, gridX(last.fromFile, left), gridY(last.fromRank, top), lastPaint)
             mark(canvas, gridX(last.toFile, left), gridY(last.toRank, top), lastPaint)
@@ -131,7 +155,9 @@ class BoardView @JvmOverloads constructor(
 
     /** 提示箭头画在棋子之上，避免被棋子遮住（对齐网页版效果） */
     private fun drawHint(canvas: Canvas, top: Float, left: Float) {
+        if (!showArrow) return
         val m = controller ?: return
+        if (m.browseIndex >= 0) return
         val hint = m.hintMove ?: return
         drawHintArrow(canvas,
             gridX(hint.fromFile, left), gridY(hint.fromRank, top),
