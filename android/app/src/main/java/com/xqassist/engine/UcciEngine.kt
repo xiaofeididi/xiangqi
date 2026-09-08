@@ -142,6 +142,7 @@ class UcciEngine(
         movetimeMs: Int = 1000,
         depth: Int = 0,
         multiPv: Int = 1,
+        infinite: Boolean = false,
         onInfo: ((EngineResult) -> Unit)? = null,
     ): EngineResult {
         if (process?.isAlive != true) {
@@ -161,7 +162,7 @@ class UcciEngine(
         send("setoption name MultiPV value ${multiPv.coerceIn(1, 5)}")
         send("position fen $fen")
         val go = when {
-            depth > 0 && movetimeMs > 0 -> "go depth $depth movetime $movetimeMs"
+            infinite -> "go infinite"
             depth > 0 -> "go depth $depth"
             else -> "go movetime ${movetimeMs.coerceIn(100, 30000)}"
         }
@@ -170,13 +171,7 @@ class UcciEngine(
 
         val startedAt = System.currentTimeMillis()
         val analyzedSide = Regex("\\s([wb])\\s").find(fen)?.groupValues?.get(1) ?: "w"
-        val limitMs = when {
-            depth > 0 -> maxOf(20000L, movetimeMs * 4L + 5000L)
-            else -> movetimeMs + 5000L
-        }
-        val deadline = System.currentTimeMillis() + limitMs
-
-        while (System.currentTimeMillis() < deadline) {
+        while (true) {
             val line = reader?.readLine() ?: break
             if (line.startsWith("info")) {
                 val mpvIndex = Regex("(?<= multipv )(\\d+)").find(line)?.groupValues?.get(1)?.toInt() ?: 1
@@ -244,6 +239,10 @@ class UcciEngine(
 
     @Synchronized
     fun stop() {
+        try {
+            send("stop")
+        } catch (_: Throwable) {
+        }
         try {
             send("quit")
             process?.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)

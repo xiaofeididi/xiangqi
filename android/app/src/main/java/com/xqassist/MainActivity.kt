@@ -95,10 +95,13 @@ class MainActivity : AppCompatActivity() {
     private fun startEngine() {
         lifecycleScope.launch(Dispatchers.IO) {
             val file = EngineInstaller.install(this@MainActivity)
-            if (file == null) {
-                statusMessage = "皮卡鱼文件缺失"
-                return@launch
+        if (file == null) {
+            statusMessage = "皮卡鱼文件缺失"
+            withContext(Dispatchers.Main) {
+                renderInfo()
             }
+            return@launch
+        }
             val installed = UcciEngine(file, EngineInstaller.nnueFile(this@MainActivity), 2, 128)
             installed.start()
             withContext(Dispatchers.Main) {
@@ -247,28 +250,9 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        controls.addView(actionButton("分析红方") { analyzeFor("w") })
-        controls.addView(actionButton("分析黑方") { analyzeFor("b") })
         controls.addView(check("显示云库", displayCloud) { _, value -> displayCloud = value; if (value) queryCloud() })
         controls.addView(check("执行云库", executeCloud) { _, value -> executeCloud = value })
         enginePage.addView(controls)
-
-        val timeRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, toPx(3), 0, toPx(3))
-        }
-        timeRow.addView(TextView(this).apply { text = "思考时间："; textSize = 13f })
-        val timeInput = EditText(this).apply {
-            setText(((thinkMs / 100) / 10.0).toString())
-            inputType = InputType.TYPE_CLASS_NUMBER
-            textSize = 13f
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        timeInput.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) setThinkSeconds(timeInput.text.toString()) }
-        timeRow.addView(timeInput)
-        timeRow.addView(TextView(this).apply { text = " 秒"; textSize = 13f })
-        enginePage.addView(timeRow)
 
         val switches = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         switches.addView(check("后台思考", backgroundThink) { _, value -> backgroundThink = value })
@@ -295,8 +279,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildSettingsPage(toPx: (Int) -> Int) {
         settingsPage.removeAllViews()
-        val depthLabels = listOf("不限", "6 层", "8 层", "10 层", "12 层", "14 层", "16 层")
-        val depthValues = listOf(0, 6, 8, 10, 12, 14, 16)
+        val depthLabels = listOf("不限", "6 层", "8 层", "10 层", "12 层", "14 层", "16 层", "18 层", "20 层", "22 层", "24 层")
+        val depthValues = listOf(0, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24)
         val depthRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -501,25 +485,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun analyzeFor(side: String) {
-        if (!engineReady || controller.thinking) {
-            setStatusMessage("皮卡鱼还没就绪或正在分析")
-            renderInfo()
-            return
-        }
-        val fen = controller.fen.split(' ').toMutableList().apply { this[1] = side }.joinToString(" ")
-        val requestToken = positionToken
-        setStatusMessage("${sideName(side)}分析中…")
-        lifecycleScope.launch(Dispatchers.IO) {
-            val result = requestEngine(fen, side)
-            withContext(Dispatchers.Main) {
-                if (requestToken != positionToken) return@withContext
-                renderEngine(result, live = false)
-                refreshUi()
-            }
-        }
-    }
-
     private fun toggleAnalysisMode() {
         if (analysisMode) {
             analysisMode = false
@@ -548,7 +513,7 @@ class MainActivity : AppCompatActivity() {
         val side = controller.sideToMove
         val requestToken = positionToken
         analysisJob = lifecycleScope.launch(Dispatchers.IO) {
-            val result = requestEngine(fen, side)
+            val result = requestEngine(fen, side, infinite = true)
             withContext(Dispatchers.Main) {
                 if (requestToken != positionToken) return@withContext
                 renderEngine(result, live = true)
@@ -574,7 +539,7 @@ class MainActivity : AppCompatActivity() {
         analyzeAndMove(controller.sideToMove)
     }
 
-    private suspend fun requestEngine(fen: String, side: String): EngineResult = engineMutex.withLock {
+    private suspend fun requestEngine(fen: String, side: String, infinite: Boolean = false): EngineResult = engineMutex.withLock {
         val current = engine ?: return@withLock EngineResult()
         if (!current.isReady) return@withLock EngineResult()
         current.analyze(
@@ -582,6 +547,7 @@ class MainActivity : AppCompatActivity() {
             movetimeMs = thinkMs,
             depth = searchDepth,
             multiPv = multiPv,
+            infinite = infinite,
             onInfo = { partial ->
                 runOnUiThread {
                     if (partial.bestmove.isNotBlank()) renderEngine(partial, live = true)
@@ -648,7 +614,7 @@ class MainActivity : AppCompatActivity() {
     private fun renderEngine(result: EngineResult, live: Boolean) {
         lastResult = result
         lastLive = live
-        if (result.fen.isNotBlank() && result.fen != controller.fen) return
+        if (result.fen.isNotBlank() && result.fen.substringBefore(' ') != controller.fen.substringBefore(' ')) return
         if (result.bestmove.isNotBlank()) controller.hintFromIccs(result.bestmove)
         refreshUi()
         renderInfo()
