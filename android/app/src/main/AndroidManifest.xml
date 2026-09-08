@@ -37,6 +37,20 @@
             android:name=".overlay.OverlayService"
             android:exported="false" />
 
+
+        <service
+            android:name=".connection.LiveLinkService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:canPerformGestures="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/livelink_service" />
+        </service>
+
         <service
             android:name=".engine.EngineService"
             android:exported="false"

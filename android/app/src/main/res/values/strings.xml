@@ -2,4 +2,5 @@
     <string name="app_name">象棋助手</string>
     <string name="noti_capture_title">屏幕识别进行中</string>
     <string name="noti_capture_text">正在分析棋盘…</string>
+    <string name="livelink_desc">读取对局棋盘并模拟走子</string>
 </resources>

@@ -19,6 +19,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.xqassist.core.Notation
+import com.xqassist.connection.LiveLinkService
 import com.xqassist.engine.CloudBook
 import com.xqassist.engine.BookMove
 import com.xqassist.engine.EngineInstaller
@@ -761,7 +762,7 @@ class MainActivity : AppCompatActivity() {
                 7 -> toggleAnalysisMode()
                 8 -> playBestNow()
                 9 -> forceChangeMove()
-                10 -> Toast.makeText(this, "连线将在下一阶段接入", Toast.LENGTH_SHORT).show()
+                10 -> linkDialog()
                 11 -> toggleOverlay()
                 12 -> settingsDialog()
             }
@@ -857,6 +858,23 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this).setTitle("思考时间（1-60 秒）").setView(input)
             .setPositiveButton("确定") { _, _ -> setThinkSeconds(input.text.toString()) }
             .setNegativeButton("取消", null).show()
+    }
+
+    private fun linkDialog() {
+        if (!LiveLinkService.isConnected) {
+            android.app.AlertDialog.Builder(this).setTitle("连线")
+                .setMessage("需要先开启无障碍服务，才能读取对局界面并模拟走子。是否前往系统设置？")
+                .setPositiveButton("去开启") { _, _ ->
+                    startActivity(android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                }
+                .setNegativeButton("取消", null).show()
+            return
+        }
+        val svc = LiveLinkService.instance
+        val summary = try { svc?.dumpNodes()?.take(3000) ?: "无窗口" } catch (e: Throwable) { "读取失败：" + e.message }
+        android.app.AlertDialog.Builder(this).setTitle("连线已开启")
+            .setMessage("当前界面节点摘要：\n" + summary)
+            .setPositiveButton("确定", null).show()
     }
 
     private fun toggleOverlay() {
