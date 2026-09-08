@@ -710,8 +710,7 @@ class MainActivity : AppCompatActivity() {
                 text = "$cn\t${move.rank}\t${String.format("%.2f", move.winrate)}%\t!(${move.score})"
                 setPadding(0, 12, 0, 12)
                 setOnClickListener {
-                    showCloudHint(move.move)
-                    if (executeCloud) playCloudMove(move.move)
+                    playCloudMove(move.move)
                 }
             }
             openingPage.addView(row)
