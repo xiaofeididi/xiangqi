@@ -11,7 +11,6 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.CompoundButton
 import android.widget.EditText
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -52,6 +51,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var gameTab: Button
     private lateinit var settingsTab: Button
     private lateinit var analysisButton: Button
+    private lateinit var engineRedButton: Button
+    private lateinit var engineBlackButton: Button
 
     private var engine: UcciEngine? = null
     private val engineMutex = Mutex()
@@ -123,34 +124,37 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(Color.parseColor("#E8D5A9"))
         }
 
-        val toolbar = HorizontalScrollView(this).apply {
+        val toolbar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.WHITE)
-            isHorizontalScrollBarEnabled = false
+            setPadding(dp(4), dp(2), dp(4), dp(2))
         }
-        val tools = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(4), dp(4), dp(4), dp(4))
-        }
-        fun tool(icon: String, action: () -> Unit): Button = Button(this).apply {
-            text = icon
-            textSize = 19f
+        fun tool(label: String, action: () -> Unit): Button = Button(this).apply {
+            text = label
+            textSize = 13f
+            isAllCaps = false
             setPadding(0, 0, 0, 0)
-            setBackgroundColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(dp(46), dp(46)).apply { marginEnd = dp(2) }
+            setBackgroundColor(Color.parseColor("#F5F5F5"))
+            layoutParams = LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginEnd = dp(2) }
             setOnClickListener { action() }
         }
-        tools.addView(tool("☰") { menuDialog() })
-        tools.addView(tool("📄") { newGame() })
-        tools.addView(tool("✏") { editDialog() })
-        tools.addView(tool("🔁") { flipped = !flipped; refreshUi() })
-        tools.addView(tool("🖥") { setEngineSide("b") })
-        tools.addView(tool("🟥") { setEngineSide("w") })
-        analysisButton = tool("🔍") { toggleAnalysisMode() }
-        tools.addView(analysisButton)
-        tools.addView(tool("⚡") { playBestNow() })
-        tools.addView(tool("b") { forceChangeMove() })
-        toolbar.addView(tools)
+        val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        row1.addView(tool("菜单") { menuDialog() })
+        row1.addView(tool("新局") { newGame() })
+        row1.addView(tool("编辑") { editDialog() })
+        row1.addView(tool("翻转") { flipped = !flipped; refreshUi() })
+        row1.addView(tool("悬浮窗") { toggleOverlay() })
+        val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        engineRedButton = tool("引擎执红") { setEngineSide("w") }
+        engineBlackButton = tool("引擎执黑") { setEngineSide("b") }
+        analysisButton = tool("分析模式") { toggleAnalysisMode() }
+        row2.addView(engineRedButton)
+        row2.addView(engineBlackButton)
+        row2.addView(analysisButton)
+        row2.addView(tool("立即出招") { playBestNow() })
+        row2.addView(tool("换招") { forceChangeMove() })
+        toolbar.addView(row1)
+        toolbar.addView(row2)
 
         val navBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -164,10 +168,10 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
             setOnClickListener { action() }
         }
-        navBar.addView(nav("«") { browseFirst() })
-        navBar.addView(nav("‹") { browsePrevious() })
-        navBar.addView(nav("›") { browseNext() })
-        navBar.addView(nav("»") { browseLast() })
+        navBar.addView(nav("开局") { browseFirst() })
+        navBar.addView(nav("后退") { browsePrevious() })
+        navBar.addView(nav("前进") { browseNext() })
+        navBar.addView(nav("终局") { browseLast() })
         navBar.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(34))
 
         board = BoardView(this).apply {
@@ -623,7 +627,16 @@ class MainActivity : AppCompatActivity() {
         renderInfo()
     }
 
+    private fun updateToolStates() {
+        val on = Color.parseColor("#C8E6C9")
+        val off = Color.parseColor("#F5F5F5")
+        if (::engineRedButton.isInitialized) engineRedButton.setBackgroundColor(if (engineSide == "w") on else off)
+        if (::engineBlackButton.isInitialized) engineBlackButton.setBackgroundColor(if (engineSide == "b") on else off)
+        if (::analysisButton.isInitialized) analysisButton.setBackgroundColor(if (analysisMode) on else off)
+    }
+
     private fun renderInfo() {
+        updateToolStates()
         if (bottomTab == TAB_ENGINE) renderEnginePage()
         if (bottomTab == TAB_OPENING) renderOpeningPage()
         if (bottomTab == TAB_GAME) renderGamePage()

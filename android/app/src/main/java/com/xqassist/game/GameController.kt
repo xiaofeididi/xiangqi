@@ -45,7 +45,7 @@ class GameController {
 
     /** 回看时该步的走子（供画最后一步标记） */
     val displayLastMove: Quad?
-        get() = if (browseIndex > 0 && browseIndex - 1 < moveHistory.size) moveHistory.toList()[browseIndex - 1] else lastMove
+        get() = if (browseIndex > 0 && browseIndex - 1 < moveHistory.size) moveHistory.toList()[browseIndex - 1] else null
 
     /** 全部走子记录（棋谱用） */
     val moves: List<Quad> get() = moveHistory.toList()
