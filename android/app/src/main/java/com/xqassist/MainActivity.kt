@@ -445,7 +445,10 @@ class MainActivity : AppCompatActivity() {
         renderInfo()
         if (displayCloud) queryCloud()
         maybeAutoMove()
-        if (analysisMode && !controller.thinking) continueAnalysis()
+        if (analysisMode && !controller.thinking) {
+            engine?.send("stop")
+            continueAnalysis()
+        }
     }
 
     private fun setEngineSide(side: String) {
@@ -612,9 +615,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderEngine(result: EngineResult, live: Boolean) {
+        if (result.fen.isNotBlank() && result.fen.substringBefore(' ') != controller.fen.substringBefore(' ')) return
         lastResult = result
         lastLive = live
-        if (result.fen.isNotBlank() && result.fen.substringBefore(' ') != controller.fen.substringBefore(' ')) return
         if (result.bestmove.isNotBlank()) controller.hintFromIccs(result.bestmove)
         refreshUi()
         renderInfo()
@@ -878,11 +881,11 @@ class MainActivity : AppCompatActivity() {
         val sign = if (analyzedSide == "w") 1 else -1
         mate?.let { value ->
             val redMate = value * sign
-            return if (redMate > 0) "红#${redMate}" else "黑#${kotlin.math.abs(redMate)}"
+            return if (redMate > 0) "红优 #${redMate}" else "黑优 #${kotlin.math.abs(redMate)}"
         }
         val value = cp ?: return "-"
-        val red = value * sign
-        return String.format("%.2f", red / 100.0)
+        val red = value * sign / 100.0
+        return if (red >= 0) "红优 ${String.format("%.2f", red)}" else "黑优 ${String.format("%.2f", -red)}"
     }
 
     private fun formatNps(value: Long): String = when {

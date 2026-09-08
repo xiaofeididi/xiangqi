@@ -136,7 +136,6 @@ class UcciEngine(
      * 同步分析。depth > 0 时限制深度；movetimeMs > 0 时限制用时。
      * multiPv > 1 时启用多候选，onInfo 在读取到 info 行时回调，可用于持续刷新。
      */
-    @Synchronized
     fun analyze(
         fen: String,
         movetimeMs: Int = 1000,
@@ -179,10 +178,12 @@ class UcciEngine(
                 Regex("(?<= depth )(\\d+)").find(line)?.let {
                     currentDepth = it.groupValues[1].toInt()
                 }
-                var lineScore: Int? = null
-                var lineMate: Int? = null
-                var lineNps = 0L
-                Regex("(?<= nps )(\\d+)").find(line)?.let { lineNps = it.groupValues[1].toLong() }
+        var lineScore: Int? = null
+        var lineMate: Int? = null
+        var lineNps = 0L
+        var lineTimeMs = 0L
+        Regex("(?<= nps )(\\d+)").find(line)?.let { lineNps = it.groupValues[1].toLong() }
+        Regex("(?<= time )(\\d+)").find(line)?.let { lineTimeMs = it.groupValues[1].toLong() }
                 Regex("score (cp|mate) (-?\\d+)").find(line)?.let { match ->
                     if (match.groupValues[1] == "cp") lineScore = match.groupValues[2].toInt()
                     else lineMate = match.groupValues[2].toInt()
@@ -207,7 +208,7 @@ class UcciEngine(
                             mateIn = mate,
                             depth = currentDepth,
                             pv = currentPv.toList(),
-                            timeMs = 0,
+                            timeMs = if (lineTimeMs > 0) lineTimeMs else System.currentTimeMillis() - startedAt,
                             analyzedSide = analyzedSide,
                             lines = lineMap.values.toList(),
                             nps = lineMap[1]?.nps ?: 0,
@@ -241,6 +242,7 @@ class UcciEngine(
     @Synchronized
     fun stop() {
         try {
+            send("stop")
             send("quit")
             process?.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
         } catch (_: Throwable) {
