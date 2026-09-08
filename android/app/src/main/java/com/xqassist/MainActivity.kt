@@ -23,6 +23,7 @@ import com.xqassist.engine.EngineInstaller
 import com.xqassist.engine.EngineResult
 import com.xqassist.engine.UcciEngine
 import com.xqassist.game.GameController
+import com.xqassist.overlay.OverlayService
 import com.xqassist.ui.BoardView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -131,6 +132,7 @@ class MainActivity : AppCompatActivity() {
         menus.addView(item("立即出招") { playBestNow() })
         menus.addView(item("翻转") { flipped = !flipped; refreshUi() })
         menus.addView(item("编辑") { editDialog() })
+        menus.addView(item("悬浮窗") { toggleOverlay() })
         menus.addView(item("设置") { settingsDialog() })
         menuBar.addView(menus)
 
@@ -504,6 +506,29 @@ class MainActivity : AppCompatActivity() {
         }.show()
     }
 
+    /** 悬浮窗开关：首次使用先申请系统悬浮窗权限 */
+    private var overlayOn = false
+    private fun toggleOverlay() {
+        if (!overlayOn) {
+            if (!android.provider.Settings.canDrawOverlays(this)) {
+                startActivity(
+                    android.content.Intent(
+                        android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        android.net.Uri.parse("package:$packageName"),
+                    ),
+                )
+                toast("请允许悬浮窗权限后再点一次")
+                return
+            }
+            OverlayService.start(this)
+            overlayOn = true
+            toast("悬浮窗已开启，可在棋盘上拖动")
+        } else {
+            OverlayService.stop(this)
+            overlayOn = false
+            toast("悬浮窗已关闭")
+        }
+    }
     private fun newGame() {
         controller.newGame()
         analysisMode = false
