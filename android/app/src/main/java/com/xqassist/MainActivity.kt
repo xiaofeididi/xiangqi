@@ -45,6 +45,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var openingScroll: ScrollView
     private lateinit var gamePage: ScrollView
     private lateinit var settingsPage: LinearLayout
+    private lateinit var editPanel: LinearLayout
     private lateinit var settingsScroll: ScrollView
     private lateinit var moveText: TextView
     private lateinit var engineTab: Button
@@ -229,6 +230,13 @@ class MainActivity : AppCompatActivity() {
         buildOpeningPage(toPx)
         buildSettingsPage(toPx)
 
+        editPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#EFEFEF"))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        buildEditPanel(toPx)
+
         val pages = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.38f)
@@ -242,6 +250,7 @@ class MainActivity : AppCompatActivity() {
 
         root.addView(toolbar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(board)
+        root.addView(editPanel)
         root.addView(navBar)
         root.addView(tabBar)
         root.addView(pages)
@@ -804,35 +813,53 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun editDialog() {
-        val options = arrayOf(
-            "进入编辑模式", "选红子", "选黑子", "删除模式 开/关", "清空棋盘",
-            "红方行棋", "黑方行棋", "导入 FEN", "导出 FEN", "完成编辑",
-        )
-        AlertDialog.Builder(this).setTitle("编辑棋局").setItems(options) { _, which ->
-            when (which) {
-                0 -> { controller.startEditMode(); statusMessage = "编辑模式：先选棋子，再点棋盘放置" }
-                1 -> selectEditPiece("w")
-                2 -> selectEditPiece("b")
-                3 -> { controller.editErase = !controller.editErase; statusMessage = if (controller.editErase) "删除模式开启" else "删除模式关闭" }
-                4 -> { controller.clearBoard(); statusMessage = "已清空棋盘，默认红方行棋" }
-                5 -> controller.setSideToMove("w")
-                6 -> controller.setSideToMove("b")
-                7 -> importFenDialog()
-                8 -> exportFenDialog()
-                9 -> { controller.exitEditMode(); statusMessage = "编辑完成" }
-            }
-            refreshUi(); renderInfo()
-        }.show()
+        startBoardEditor()
     }
 
-    private fun selectEditPiece(side: String) {
-        val names = if (side == "w") arrayOf("帅", "仕", "相", "马", "车", "炮", "兵") else arrayOf("将", "士", "象", "马", "车", "炮", "卒")
-        val types = arrayOf("k", "a", "b", "n", "r", "c", "p")
-        AlertDialog.Builder(this).setTitle(if (side == "w") "选择红子" else "选择黑子").setItems(names) { _, which ->
-            controller.editPiece = side + types[which]
-            statusMessage = "已选择${controller.pieceText(controller.editPiece!!)}，点击棋盘放置"
-            renderInfo()
-        }.show()
+    private fun startBoardEditor() {
+        controller.startEditMode()
+        editPanel.visibility = View.VISIBLE
+        statusMessage = "编辑模式：选下方棋子后点棋盘放置；点已有棋子可直接擦除"
+        renderInfo()
+    }
+
+    private fun finishBoardEditor() {
+        controller.exitEditMode()
+        editPanel.visibility = View.GONE
+        statusMessage = "编辑完成"
+        renderInfo()
+    }
+
+    private fun buildEditPanel(toPx: (Int) -> Int) {
+        editPanel.removeAllViews()
+        editPanel.orientation = LinearLayout.VERTICAL
+        editPanel.setBackgroundColor(Color.parseColor("#EFEFEF"))
+        editPanel.setPadding(toPx(4), toPx(3), toPx(4), toPx(3))
+        editPanel.visibility = if (controller.editMode) View.VISIBLE else View.GONE
+
+        val modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        modeRow.addView(editTool("放子") { controller.editErase = false; statusMessage = "放子模式"; renderInfo() })
+        modeRow.addView(editTool("擦除") { controller.editErase = true; statusMessage = "擦除模式"; renderInfo() })
+        modeRow.addView(editTool("红方行棋") { controller.setSideToMove("w"); statusMessage = "红方行棋"; renderInfo() })
+        modeRow.addView(editTool("黑方行棋") { controller.setSideToMove("b"); statusMessage = "黑方行棋"; renderInfo() })
+        modeRow.addView(editTool("导入FEN") { importFenDialog() })
+        modeRow.addView(editTool("导出FEN") { exportFenDialog() })
+        modeRow.addView(editTool("完成") { finishBoardEditor() })
+        editPanel.addView(modeRow)
+
+        val tray = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val names = arrayOf("帅","仕","相","马","车","炮","兵")
+        val types = arrayOf("k","a","b","n","r","c","p")
+        for (i in names.indices) tray.addView(editTool(names[i]) { controller.editErase=false; controller.editPiece="w"+types[i]; statusMessage="已选红"+names[i]+",点棋盘放置"; renderInfo() })
+        for (i in names.indices) tray.addView(editTool(names[i]) { controller.editErase=false; controller.editPiece="b"+types[i]; statusMessage="已选黑"+names[i]+",点棋盘放置"; renderInfo() })
+        editPanel.addView(tray)
+    }
+
+    private fun editTool(label: String, action: () -> Unit): Button = Button(this).apply {
+        text = label; textSize = 11f; isAllCaps=false
+        setBackgroundColor(Color.parseColor("#FAFAFA"))
+        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd=2 }
+        setOnClickListener { action() }
     }
 
     private fun importFenDialog() {
