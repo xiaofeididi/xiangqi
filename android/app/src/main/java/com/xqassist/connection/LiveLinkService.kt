@@ -30,6 +30,10 @@ class LiveLinkService : AccessibilityService() {
                 override fun onCancelled(gestureDescription: GestureDescription?) = done(false)
             }, null)
         }
+
+        fun disconnect() {
+            instance?.disableSelf()
+        }
     }
 
     override fun onServiceConnected() {

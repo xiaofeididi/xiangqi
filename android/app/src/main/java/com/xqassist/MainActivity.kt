@@ -81,6 +81,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     private var backgroundThink = true
     private var playSound = true
     private var showArrowHint = true
+    private var overlayAlpha = 1f
 
     private var cloudMoves = listOf<BookMove>()
     private var cloudLoading = false
@@ -999,7 +1000,15 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     }
 
     override fun onLink() {
-        runOnUiThread { linkDialog() }
+        runOnUiThread {
+            if (LiveLinkService.isConnected) {
+                LiveLinkService.disconnect()
+                statusMessage = "连线已断开"
+                renderInfo()
+            } else {
+                linkDialog()
+            }
+        }
     }
 
     override fun onAnalyze() {
@@ -1027,6 +1036,27 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             if (delta < 0) thinkMs = (thinkMs - 1000).coerceAtLeast(1000)
             else thinkMs = (thinkMs + 1000).coerceAtMost(60000)
             statusMessage = "思考时间 ${thinkMs / 1000} 秒"
+            renderInfo()
+        }
+    }
+
+    override fun onOpacityChange(delta: Int) {
+        runOnUiThread {
+            val svc = OverlayService.overlayDisplay ?: return@runOnUiThread
+            overlayAlpha = if (delta < 0) {
+                (overlayAlpha - 0.1f).coerceAtLeast(0.35f)
+            } else {
+                (overlayAlpha + 0.1f).coerceAtMost(1f)
+            }
+            svc.updateOpacity(overlayAlpha)
+        }
+    }
+
+    override fun onCloseOverlay() {
+        runOnUiThread {
+            overlayOn = false
+            OverlayService.stop(this)
+            statusMessage = "悬浮窗已关闭"
             renderInfo()
         }
     }

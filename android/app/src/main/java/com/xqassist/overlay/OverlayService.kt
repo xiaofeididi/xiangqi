@@ -18,14 +18,13 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 
-/** 悬浮窗显示状态通道 */
 interface OverlayDisplay {
     fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean = false)
     fun updateControls(depth: Int, seconds: Int)
     fun updateInfo(cloud: String, engineSummary: String, engineDetail: String)
+    fun updateOpacity(alpha: Float)
 }
 
-/** 悬浮窗：连线 / 分析 / 出子 + 深度时间 + 云库与引擎推荐 */
 class OverlayService : Service(), OverlayDisplay {
 
     interface Actions {
@@ -34,6 +33,8 @@ class OverlayService : Service(), OverlayDisplay {
         fun onPlayMove()
         fun onDepthChange(delta: Int)
         fun onTimeChange(delta: Int)
+        fun onOpacityChange(delta: Int)
+        fun onCloseOverlay()
     }
 
     companion object {
@@ -51,71 +52,109 @@ class OverlayService : Service(), OverlayDisplay {
 
     private val wm by lazy { getSystemService(Context.WINDOW_SERVICE) as WindowManager }
     private var root: LinearLayout? = null
+    private var mini: TextView? = null
     private var params: WindowManager.LayoutParams? = null
+    private var miniParams: WindowManager.LayoutParams? = null
     private var infoText: TextView? = null
     private var depthText: TextView? = null
     private var timeText: TextView? = null
+    private var opacityText: TextView? = null
     private var linkButton: Button? = null
     private var analyzeButton: Button? = null
     private var playButton: Button? = null
+    private var expanded = true
+    private var opacity = 1f
     private var startX = 0
     private var startY = 0
     private var initialX = 0
     private var initialY = 0
+    private var initialWidth = 0
+    private var initialHeight = 0
 
     override fun onCreate() {
         super.onCreate()
         overlayDisplay = this
-        val density = resources.displayMetrics.density
-        fun dp(value: Int) = (value * density).toInt()
+
+        val metrics = resources.displayMetrics
+        fun dp(value: Int) = (value * metrics.density).toInt()
+        val baseWidth = (metrics.widthPixels * 0.72f).toInt().coerceIn(dp(240), dp(430))
+        val baseHeight = baseWidth * 9 / 16
+
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            minimumWidth = dp(290)
-            setPadding(dp(10), dp(6), dp(10), dp(9))
+            setBackgroundColor(Color.TRANSPARENT)
+        }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(6), dp(10), dp(8))
             background = GradientDrawable().apply {
                 setColor(0xF218202A.toInt())
                 cornerRadius = dp(14).toFloat()
             }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         }
+        panel.addView(card)
 
-        val handle = TextView(this).apply {
+        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        header.addView(TextView(this).apply {
             text = "≡ 象棋助手"
             textSize = 12f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            setPadding(0, dp(2), 0, dp(5))
-        }
-        panel.addView(handle)
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+        })
+        header.addView(miniButton("—") { setExpanded(false) })
+        header.addView(miniButton("×") {
+            actions?.onCloseOverlay()
+            stopSelf()
+        })
+        card.addView(header)
+        card.addView(spacer(dp(5)))
 
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        linkButton = overlayButton("连线")
-        analyzeButton = overlayButton("分析")
-        playButton = overlayButton("出子")
+        linkButton = actionButton("连线")
+        analyzeButton = actionButton("分析")
+        playButton = actionButton("出子")
         buttons.addView(linkButton)
         buttons.addView(analyzeButton)
         buttons.addView(playButton)
-        panel.addView(buttons)
-        panel.addView(spacer(dp(6)))
+        card.addView(buttons)
+        card.addView(spacer(dp(5)))
 
-        val controlRows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        controlRows.addView(controlRow("深度", "不限") { delta -> actions?.onDepthChange(delta) })
-        controlRows.addView(spacer(dp(4)))
-        controlRows.addView(controlRow("时间", "3秒") { delta -> actions?.onTimeChange(delta) })
-        panel.addView(controlRows)
-        panel.addView(spacer(dp(7)))
+        val controls = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        controls.addView(controlRow("深度", "不限") { delta -> actions?.onDepthChange(delta) })
+        controls.addView(spacer(dp(3)))
+        controls.addView(controlRow("时间", "3秒") { delta -> actions?.onTimeChange(delta) })
+        controls.addView(spacer(dp(3)))
+        controls.addView(controlRow("透明", "100%") { delta -> actions?.onOpacityChange(delta) })
+        card.addView(controls)
+        card.addView(spacer(dp(5)))
 
         infoText = TextView(this).apply {
             text = "云库：-\n引擎：-\n-"
             textSize = 11.5f
             setTextColor(Color.WHITE)
             setLineSpacing(dp(1).toFloat(), 1f)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         }
-        panel.addView(infoText)
+        card.addView(infoText)
+
+        val resize = TextView(this).apply {
+            text = "↘"
+            textSize = 14f
+            setTextColor(0xB3FFFFFF.toInt())
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            setPadding(0, dp(3), 0, 0)
+        }
+        card.addView(resize, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         val p = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            baseWidth,
+            baseHeight,
             if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
@@ -123,37 +162,116 @@ class OverlayService : Service(), OverlayDisplay {
         )
         p.gravity = Gravity.TOP or Gravity.START
         p.x = dp(14)
-        p.y = dp(96)
+        p.y = dp(88)
 
-        handle.setOnTouchListener { _, event ->
+        header.setOnTouchListener { _, event -> moveHandler(event, p, panel) }
+        resize.setOnTouchListener { _, event -> resizeHandler(event, p, panel, metrics.widthPixels - dp(16)) }
+
+        linkButton?.setOnClickListener { actions?.onLink() }
+        analyzeButton?.setOnClickListener { actions?.onAnalyze() }
+        playButton?.setOnClickListener { actions?.onPlayMove() }
+
+        val miniView = TextView(this).apply {
+            text = "≡ 象棋"
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(dp(9), dp(7), dp(9), dp(7))
+            background = GradientDrawable().apply {
+                setColor(0xE618202A.toInt())
+                cornerRadius = dp(12).toFloat()
+            }
+            visibility = View.GONE
+        }
+        val mp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else WindowManager.LayoutParams.TYPE_PHONE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT,
+        )
+        mp.gravity = Gravity.TOP or Gravity.START
+        mp.x = p.x
+        mp.y = p.y
+        miniView.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    startX = event.rawX.toInt()
-                    startY = event.rawY.toInt()
-                    initialX = p.x
-                    initialY = p.y
+                    startX = event.rawX.toInt(); startY = event.rawY.toInt()
+                    initialX = mp.x; initialY = mp.y
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    p.x = initialX + (event.rawX.toInt() - startX)
-                    p.y = initialY + (event.rawY.toInt() - startY)
-                    wm.updateViewLayout(panel, p)
+                    val movedX = event.rawX.toInt() - startX
+                    val movedY = event.rawY.toInt() - startY
+                    mp.x = initialX + movedX
+                    mp.y = initialY + movedY
+                    if (movedX != 0 || movedY != 0) wm.updateViewLayout(miniView, mp)
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    val moved = kotlin.math.abs(event.rawX.toInt() - startX) < dp(8) &&
+                        kotlin.math.abs(event.rawY.toInt() - startY) < dp(8)
+                    if (moved) setExpanded(true)
                     true
                 }
                 else -> false
             }
         }
 
-        linkButton?.setOnClickListener { actions?.onLink() }
-        analyzeButton?.setOnClickListener { actions?.onAnalyze() }
-        playButton?.setOnClickListener { actions?.onPlayMove() }
-
         wm.addView(panel, p)
+        wm.addView(miniView, mp)
         root = panel
         params = p
+        mini = miniView
+        miniParams = mp
         updateActions(false, false, false)
         updateControls(0, 3)
         updateInfo("", "", "")
+        updateOpacity(1f)
+    }
+
+    private fun moveHandler(event: MotionEvent, p: WindowManager.LayoutParams, panel: LinearLayout): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                startX = event.rawX.toInt(); startY = event.rawY.toInt()
+                initialX = p.x; initialY = p.y
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                p.x = initialX + (event.rawX.toInt() - startX)
+                p.y = initialY + (event.rawY.toInt() - startY)
+                wm.updateViewLayout(panel, p)
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun resizeHandler(event: MotionEvent, p: WindowManager.LayoutParams, panel: LinearLayout, maxWidth: Int): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                startX = event.rawX.toInt(); startY = event.rawY.toInt()
+                initialWidth = p.width
+                initialHeight = p.height
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val width = initialWidth + (event.rawX.toInt() - startX)
+                val clampedWidth = width.coerceIn((maxWidth / 4).coerceAtLeast(180), maxWidth)
+                p.width = clampedWidth
+                p.height = clampedWidth * 9 / 16
+                wm.updateViewLayout(panel, p)
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun setExpanded(value: Boolean) {
+        expanded = value
+        root?.visibility = if (value) View.VISIBLE else View.GONE
+        mini?.visibility = if (value) View.GONE else View.VISIBLE
     }
 
     private fun controlRow(label: String, initial: String, onDelta: (Int) -> Unit): LinearLayout {
@@ -175,13 +293,17 @@ class OverlayService : Service(), OverlayDisplay {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         row.addView(value)
-        if (label == "深度") depthText = value else timeText = value
+        when (label) {
+            "深度" -> depthText = value
+            "时间" -> timeText = value
+            "透明" -> opacityText = value
+        }
         row.addView(miniButton("-") { onDelta(-1) })
         row.addView(miniButton("+") { onDelta(1) })
         return row
     }
 
-    private fun overlayButton(label: String): Button = Button(this).apply {
+    private fun actionButton(label: String): Button = Button(this).apply {
         text = label
         textSize = 12f
         isAllCaps = false
@@ -197,7 +319,7 @@ class OverlayService : Service(), OverlayDisplay {
 
     private fun miniButton(label: String, action: () -> Unit): Button = Button(this).apply {
         text = label
-        textSize = 13f
+        textSize = 12f
         isAllCaps = false
         includeFontPadding = false
         minHeight = 0
@@ -228,7 +350,7 @@ class OverlayService : Service(), OverlayDisplay {
 
     override fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean) {
         linkButton?.apply {
-            text = if (linkOn) "连线·开" else "连线"
+            text = if (linkOn) "断开" else "连线"
             background = roundBackground(if (linkOn) 0xFF2E7D32.toInt() else 0xFF39465A.toInt(), dp8().toFloat())
         }
         analyzeButton?.apply {
@@ -252,14 +374,25 @@ class OverlayService : Service(), OverlayDisplay {
             (if (engineDetail.isBlank()) "" else "\n" + engineDetail)
     }
 
+    override fun updateOpacity(alpha: Float) {
+        opacity = alpha.coerceIn(0.35f, 1f)
+        root?.alpha = opacity
+        mini?.alpha = opacity
+        opacityText?.text = (opacity * 100).toInt().toString() + "%"
+    }
+
     override fun onDestroy() {
         overlayDisplay = null
         root?.let { wm.removeView(it) }
+        mini?.let { wm.removeView(it) }
         root = null
+        mini = null
         params = null
+        miniParams = null
         infoText = null
         depthText = null
         timeText = null
+        opacityText = null
         linkButton = null
         analyzeButton = null
         playButton = null
