@@ -18,8 +18,15 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 
+/** 悬浮窗显示状态通道 */
+interface OverlayDisplay {
+    fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean = false)
+    fun updateControls(depth: Int, seconds: Int)
+    fun updateInfo(cloud: String, engineSummary: String, engineDetail: String)
+}
+
 /** 悬浮窗：连线 / 分析 / 出子 + 深度时间 + 云库与引擎推荐 */
-class OverlayService : Service(), OverlayService.OverlayDisplay {
+class OverlayService : Service(), OverlayDisplay {
 
     interface Actions {
         fun onLink()
@@ -27,12 +34,6 @@ class OverlayService : Service(), OverlayService.OverlayDisplay {
         fun onPlayMove()
         fun onDepthChange(delta: Int)
         fun onTimeChange(delta: Int)
-    }
-
-    interface OverlayDisplay {
-        fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean = false)
-        fun updateControls(depth: Int, seconds: Int)
-        fun updateInfo(cloud: String, engineSummary: String, engineDetail: String)
     }
 
     companion object {
@@ -64,7 +65,7 @@ class OverlayService : Service(), OverlayService.OverlayDisplay {
 
     override fun onCreate() {
         super.onCreate()
-        display = this as OverlayService.OverlayDisplay
+        display = this
         val density = resources.displayMetrics.density
         fun dp(value: Int) = (value * density).toInt()
         val panel = LinearLayout(this).apply {
