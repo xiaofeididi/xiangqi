@@ -838,10 +838,26 @@ class MainActivity : AppCompatActivity() {
         editPanel.visibility = if (controller.editMode) View.VISIBLE else View.GONE
 
         val modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        modeRow.addView(editTool("放子") { controller.editErase = false; statusMessage = "放子模式"; renderInfo() })
-        modeRow.addView(editTool("擦除") { controller.editErase = true; statusMessage = "擦除模式"; renderInfo() })
-        modeRow.addView(editTool("红方行棋") { controller.setSideToMove("w"); statusMessage = "红方行棋"; renderInfo() })
-        modeRow.addView(editTool("黑方行棋") { controller.setSideToMove("b"); statusMessage = "黑方行棋"; renderInfo() })
+        modeRow.addView(editChoice("放子", !controller.editErase) {
+            controller.editErase = false
+            statusMessage = "放子模式"
+            renderInfo()
+        })
+        modeRow.addView(editChoice("擦除", controller.editErase) {
+            controller.editErase = true
+            statusMessage = "擦除模式"
+            renderInfo()
+        })
+        modeRow.addView(editChoice("红方行棋", controller.sideToMove == "w") {
+            controller.setSideToMove("w")
+            statusMessage = "红方行棋"
+            renderInfo()
+        })
+        modeRow.addView(editChoice("黑方行棋", controller.sideToMove == "b") {
+            controller.setSideToMove("b")
+            statusMessage = "黑方行棋"
+            renderInfo()
+        })
         modeRow.addView(editTool("导入FEN") { importFenDialog() })
         modeRow.addView(editTool("导出FEN") { exportFenDialog() })
         modeRow.addView(editTool("完成") { finishBoardEditor() })
@@ -850,17 +866,31 @@ class MainActivity : AppCompatActivity() {
         val tray = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val names = arrayOf("帅","仕","相","马","车","炮","兵")
         val types = arrayOf("k","a","b","n","r","c","p")
-        for (i in names.indices) tray.addView(editTool(names[i]) { controller.editErase=false; controller.editPiece="w"+types[i]; statusMessage="已选红"+names[i]+",点棋盘放置"; renderInfo() })
-        for (i in names.indices) tray.addView(editTool(names[i]) { controller.editErase=false; controller.editPiece="b"+types[i]; statusMessage="已选黑"+names[i]+",点棋盘放置"; renderInfo() })
+        for (i in names.indices) {
+            val code = "w" + types[i]
+            tray.addView(editChoice(names[i], controller.editPiece == code) {
+                controller.editErase = false
+                controller.editPiece = code
+                statusMessage = "已选红" + names[i] + "，点棋盘放置"
+                renderInfo()
+            })
+        }
+        for (i in names.indices) {
+            val code = "b" + types[i]
+            tray.addView(editChoice(names[i], controller.editPiece == code) {
+                controller.editErase = false
+                controller.editPiece = code
+                statusMessage = "已选黑" + names[i] + "，点棋盘放置"
+                renderInfo()
+            })
+        }
         editPanel.addView(tray)
     }
 
-    private fun editTool(label: String, action: () -> Unit): Button = Button(this).apply {
-        text = label; textSize = 11f; isAllCaps=false
-        setBackgroundColor(Color.parseColor("#FAFAFA"))
-        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd=2 }
-        setOnClickListener { action() }
-    }
+    private fun editChoice(label: String, active: Boolean, action: () -> Unit): Button =
+        editTool(label, action).apply {
+            setBackgroundColor(if (active) Color.parseColor("#C8E6C9") else Color.parseColor("#FAFAFA"))
+        }
 
     private fun importFenDialog() {
         val input = EditText(this).apply { setText(controller.exportFen()) }
