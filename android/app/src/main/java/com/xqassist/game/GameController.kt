@@ -198,14 +198,17 @@ class GameController {
         val selectedPiece = editPiece
         if (selectedPiece == null) {
             val piece = pos.pieceAt(rank, file)
-            if (piece == null) return "空点：请先选择要放的棋子"
+            if (piece == null) return "空点：请先从下方选择棋子"
             editPiece = piece
-            return "已选中 ${pieceText(piece)}，点击目标格"
+            pos.setPiece(rank, file, null)
+            resetHistory(pos)
+            return "已拿起 " + pieceText(piece) + "，点击目标格放置"
         }
+        val existed = pos.pieceAt(rank, file)
         pos.setPiece(rank, file, selectedPiece)
         resetHistory(pos)
         editPiece = null
-        return "已放置棋子"
+        return "已放置 " + pieceText(selectedPiece) + (if (existed == null) "" else "，覆盖了 " + pieceText(existed))
     }
 
     fun clearBoard() {
