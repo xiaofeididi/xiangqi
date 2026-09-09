@@ -892,6 +892,15 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(if (active) Color.parseColor("#C8E6C9") else Color.parseColor("#FAFAFA"))
         }
 
+    private fun editTool(label: String, action: () -> Unit): Button = Button(this).apply {
+        text = label
+        textSize = 11f
+        isAllCaps = false
+        setBackgroundColor(Color.parseColor("#FAFAFA"))
+        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = 2 }
+        setOnClickListener { action() }
+    }
+
     private fun importFenDialog() {
         val input = EditText(this).apply { setText(controller.exportFen()) }
         AlertDialog.Builder(this).setTitle("导入 FEN").setView(input).setPositiveButton("导入") { _, _ ->
