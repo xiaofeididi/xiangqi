@@ -338,7 +338,7 @@ class OverlayService : Service(), OverlayDisplay {
         stateListAnimator = null
         background = roundBackground(0xFF334154.toInt(), dp7().toFloat())
         layoutParams = LinearLayout.LayoutParams(dp(16), dp(18)).apply {
-            marginStart = dp3()
+            marginStart = dp(3)
         }
         setOnClickListener { action() }
     }
@@ -356,6 +356,7 @@ class OverlayService : Service(), OverlayDisplay {
     private fun dp7(): Int = (7 * resources.displayMetrics.density).toInt()
     private fun dp3(): Int = (3 * resources.displayMetrics.density).toInt()
     private fun dp2(): Int = (2 * resources.displayMetrics.density).toInt()
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     override fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean) {
         linkButton?.apply {
