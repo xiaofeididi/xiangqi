@@ -78,7 +78,7 @@ class OverlayService : Service(), OverlayDisplay {
         val metrics = resources.displayMetrics
         fun dp(value: Int) = (value * metrics.density).toInt()
         val baseWidth = (metrics.widthPixels * 0.72f).toInt().coerceIn(dp(240), dp(430))
-        val baseHeight = baseWidth * 9 / 16
+        val baseHeight = baseWidth * 9 / 16 + dp(8)
 
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -123,14 +123,13 @@ class OverlayService : Service(), OverlayDisplay {
         card.addView(spacer(dp(5)))
 
         val controls = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
-        controls.addView(controlRow("深度", "不限") { delta -> actions?.onDepthChange(delta) })
-        controls.addView(spacer(dp(3)))
-        controls.addView(controlRow("时间", "3秒") { delta -> actions?.onTimeChange(delta) })
-        controls.addView(spacer(dp(3)))
-        controls.addView(controlRow("透明", "100%") { delta -> actions?.onOpacityChange(delta) })
+        controls.addView(controlTile("深", "不限", 1.0f) { delta -> actions?.onDepthChange(delta) })
+        controls.addView(controlTile("时", "3秒", 1.0f) { delta -> actions?.onTimeChange(delta) })
+        controls.addView(controlTile("透明", "100%", 1.2f) { delta -> actions?.onOpacityChange(delta) })
         card.addView(controls)
         card.addView(spacer(dp(5)))
 
@@ -274,28 +273,38 @@ class OverlayService : Service(), OverlayDisplay {
         mini?.visibility = if (value) View.GONE else View.VISIBLE
     }
 
-    private fun controlRow(label: String, initial: String, onDelta: (Int) -> Unit): LinearLayout {
+    private fun controlTile(label: String, initial: String, weight: Float, onDelta: (Int) -> Unit): LinearLayout {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, weight).apply {
+                marginEnd = dp3()
+            }
+            background = GradientDrawable().apply {
+                setColor(0x22FFFFFF.toInt())
+                cornerRadius = dp7().toFloat()
+            }
         }
         row.addView(TextView(this).apply {
             text = label
-            textSize = 11.5f
+            textSize = 10.5f
             setTextColor(0xB3FFFFFF.toInt())
         })
         val value = TextView(this).apply {
             text = initial
-            textSize = 12f
+            textSize = 11.5f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp2()
+                marginEnd = dp2()
+            }
         }
         row.addView(value)
         when (label) {
-            "深度" -> depthText = value
-            "时间" -> timeText = value
+            "深" -> depthText = value
+            "时" -> timeText = value
             "透明" -> opacityText = value
         }
         row.addView(miniButton("-") { onDelta(-1) })
@@ -319,16 +328,16 @@ class OverlayService : Service(), OverlayDisplay {
 
     private fun miniButton(label: String, action: () -> Unit): Button = Button(this).apply {
         text = label
-        textSize = 12f
+        textSize = 9f
         isAllCaps = false
         includeFontPadding = false
         minHeight = 0
         minWidth = 0
-        setPadding(dp8(), dp2(), dp8(), dp2())
+        setPadding(dp(5), 0, dp(5), 0)
         setTextColor(Color.WHITE)
         stateListAnimator = null
         background = roundBackground(0xFF334154.toInt(), dp7().toFloat())
-        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+        layoutParams = LinearLayout.LayoutParams(dp(16), dp(18)).apply {
             marginStart = dp3()
         }
         setOnClickListener { action() }

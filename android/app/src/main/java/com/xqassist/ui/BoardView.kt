@@ -34,12 +34,12 @@ class BoardView @JvmOverloads constructor(
     private val pieceBitmap = mutableMapOf<String, Bitmap>()
 
     private val density = resources.displayMetrics.density
-    private val bgPaint = Paint().apply { color = Color.rgb(0xE8, 0xC7, 0x8F) }
+    private val bgPaint = Paint().apply { color = Color.rgb(0xF4, 0xE4, 0xC1) }
     private val linePaint = Paint().apply {
-        color = Color.rgb(0x5A, 0x3A, 0x1A); strokeWidth = 2f * density; style = Paint.Style.STROKE
+        color = Color.rgb(0x77, 0x4F, 0x2C); strokeWidth = 1.6f * density; style = Paint.Style.STROKE
     }
     private val thickPaint = Paint().apply {
-        color = Color.rgb(0x5A, 0x3A, 0x1A); strokeWidth = 4f * density; style = Paint.Style.STROKE
+        color = Color.rgb(0x77, 0x4F, 0x2C); strokeWidth = 3.4f * density; style = Paint.Style.STROKE
     }
     private val lastPaint = Paint().apply {
         color = Color.rgb(0x00, 0x99, 0x66); strokeWidth = 8f * density; style = Paint.Style.STROKE
@@ -52,7 +52,8 @@ class BoardView @JvmOverloads constructor(
         strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; style = Paint.Style.STROKE
     }
     private val riverPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(0x7A, 0x50, 0x20); textSize = 30f * density
+        color = Color.rgb(0x86, 0x5E, 0x38)
+        textSize = 28f * density
         textAlign = Paint.Align.CENTER
     }
 
@@ -73,7 +74,8 @@ class BoardView @JvmOverloads constructor(
         // 楚河汉界
         val midTop = top + 4 * cell
         val midBot = top + 5 * cell
-        val midY = (midTop + midBot) / 2 - 6 * density
+        val fontMetrics = riverPaint.fontMetrics
+        val midY = (midTop + midBot) / 2 - (fontMetrics.ascent + fontMetrics.descent) / 2f
         canvas.drawText("楚河", left + 2.5f * cell, midY, riverPaint)
         canvas.drawText("汉界", left + 5.5f * cell, midY, riverPaint)
 
@@ -194,8 +196,9 @@ class BoardView @JvmOverloads constructor(
         for (r in 0..9) for (f in 0..8) {
             val code = pos().pieceAt(r, f) ?: continue
             val bmp = loadPiece(code) ?: continue
-            val x = gridX(f, left) - cell * 0.46f
-            val y = gridY(r, top) - cell * 0.46f
+        val side = cell * 0.94f
+        val x = gridX(f, left) - side / 2f
+        val y = gridY(r, top) - side / 2f
             canvas.drawBitmap(bmp, x, y, null)
         }
     }
@@ -207,7 +210,7 @@ class BoardView @JvmOverloads constructor(
         } catch (_: Throwable) {
             null
         } ?: return null
-        val side = (cell * 0.92f).toInt().coerceAtLeast(1)
+        val side = (cell * 0.94f).toInt().coerceAtLeast(1)
         val scaled = Bitmap.createScaledBitmap(bmp, side, side, true)
         pieceBitmap[code] = scaled
         return scaled

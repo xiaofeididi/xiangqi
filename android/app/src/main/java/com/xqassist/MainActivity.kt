@@ -128,20 +128,20 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#E8D5A9"))
+            setBackgroundColor(Color.parseColor("#F5F1E8"))
         }
 
         val toolbar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
-            setPadding(dp(4), dp(2), dp(4), dp(2))
+            setBackgroundColor(Color.parseColor("#FDFBF7"))
+            setPadding(dp(6), dp(4), dp(6), dp(4))
         }
         fun tool(label: String, action: () -> Unit): Button = Button(this).apply {
             text = label
             textSize = 13f
             isAllCaps = false
             setPadding(0, 0, 0, 0)
-            setBackgroundColor(Color.parseColor("#F5F5F5"))
+            setBackgroundColor(Color.parseColor("#FFFFFF"))
             layoutParams = LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginEnd = dp(2) }
             setOnClickListener { action() }
         }
@@ -165,13 +165,13 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
         navBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Color.parseColor("#D9E6F2"))
+            setBackgroundColor(Color.parseColor("#FDFBF7"))
         }
         fun nav(label: String, action: () -> Unit): Button = Button(this).apply {
             text = label
             textSize = 15f
             setPadding(0, 0, 0, 0)
-            setBackgroundColor(Color.parseColor("#D9E6F2"))
+            setBackgroundColor(Color.parseColor("#FDFBF7"))
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
             setOnClickListener { action() }
         }
@@ -189,7 +189,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
         tabBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Color.parseColor("#F7F7F7"))
+            setBackgroundColor(Color.parseColor("#F1ECE2"))
         }
         engineTab = tabButton("引擎") { switchTab(TAB_ENGINE) }
         openingTab = tabButton("开局库") { switchTab(TAB_OPENING) }
@@ -202,12 +202,12 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
         enginePage = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#FFF8E7"))
+            setBackgroundColor(Color.parseColor("#FBF9F4"))
             setPadding(dp(8), dp(4), dp(8), dp(8))
         }
         openingPage = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#FFF8E7"))
+            setBackgroundColor(Color.parseColor("#FBF9F4"))
             setPadding(dp(8), dp(4), dp(8), dp(8))
         }
         moveText = TextView(this).apply {
@@ -216,13 +216,13 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             setLineSpacing(dp(2).toFloat(), 1f)
         }
         gamePage = ScrollView(this).apply {
-            setBackgroundColor(Color.parseColor("#FFF8E7"))
+            setBackgroundColor(Color.parseColor("#FBF9F4"))
             addView(moveText)
             setPadding(dp(10), dp(8), dp(10), dp(10))
         }
         settingsPage = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#FFF8E7"))
+            setBackgroundColor(Color.parseColor("#FBF9F4"))
             setPadding(dp(8), dp(4), dp(8), dp(8))
         }
         settingsScroll = ScrollView(this).apply {
@@ -237,8 +237,9 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
         editPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#EFEFEF"))
+            setBackgroundColor(Color.parseColor("#F1ECE2"))
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            visibility = View.GONE
         }
         buildEditPanel()
 
