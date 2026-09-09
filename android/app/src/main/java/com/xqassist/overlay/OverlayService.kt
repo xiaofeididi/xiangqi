@@ -19,7 +19,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 
 /** 悬浮窗：连线 / 分析 / 出子 + 深度时间 + 云库与引擎推荐 */
-class OverlayService : Service() {
+class OverlayService : Service(), OverlayService.Display {
 
     interface Actions {
         fun onLink()
@@ -29,8 +29,15 @@ class OverlayService : Service() {
         fun onTimeChange(delta: Int)
     }
 
+    interface Display {
+        fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean = false)
+        fun updateControls(depth: Int, seconds: Int)
+        fun updateInfo(cloud: String, engineSummary: String, engineDetail: String)
+    }
+
     companion object {
         var actions: Actions? = null
+        var display: Display? = null
 
         fun start(context: Context) {
             context.startService(Intent(context, OverlayService::class.java))
@@ -57,6 +64,7 @@ class OverlayService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        display = this
         val density = resources.displayMetrics.density
         fun dp(value: Int) = (value * density).toInt()
         val panel = LinearLayout(this).apply {
@@ -217,7 +225,7 @@ class OverlayService : Service() {
     private fun dp3(): Int = (3 * resources.displayMetrics.density).toInt()
     private fun dp2(): Int = (2 * resources.displayMetrics.density).toInt()
 
-    fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean = false) {
+    override fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean) {
         linkButton?.apply {
             text = if (linkOn) "连线·开" else "连线"
             background = roundBackground(if (linkOn) 0xFF2E7D32.toInt() else 0xFF39465A.toInt(), dp8().toFloat())
@@ -233,17 +241,18 @@ class OverlayService : Service() {
         playButton?.alpha = if (thinking) 0.55f else 1f
     }
 
-    fun updateControls(depth: Int, seconds: Int) {
+    override fun updateControls(depth: Int, seconds: Int) {
         depthText?.text = if (depth <= 0) "不限" else depth.toString() + "层"
         timeText?.text = seconds.toString() + "秒"
     }
 
-    fun updateInfo(cloud: String, engineSummary: String, engineDetail: String) {
+    override fun updateInfo(cloud: String, engineSummary: String, engineDetail: String) {
         infoText?.text = "云库：" + cloud.ifBlank { "-" } + "\n引擎：" + engineSummary.ifBlank { "-" } +
             (if (engineDetail.isBlank()) "" else "\n" + engineDetail)
     }
 
     override fun onDestroy() {
+        display = null
         root?.let { wm.removeView(it) }
         root = null
         params = null
