@@ -1079,7 +1079,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     private fun updateOverlayState() {
         val svc = OverlayService.overlayDisplay ?: return
         svc.updateControls(searchDepth, thinkMs / 1000)
-        svc.updateActions(lastLive, analysisMode, controller.thinking)
+        svc.updateActions(LiveLinkService.isConnected, analysisMode, controller.thinking)
         val cloudText = if (displayCloud) {
             if (cloudLoading) "查询中" else cloudMoves.firstOrNull()?.let { Notation.moveToChinese(controller.displayPos, it.move) + " " + it.winrate } ?: "无"
         } else "关"
