@@ -19,7 +19,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 
 /** 悬浮窗：连线 / 分析 / 出子 + 深度时间 + 云库与引擎推荐 */
-class OverlayService : Service(), OverlayService.Display {
+class OverlayService : Service(), OverlayService.OverlayDisplay {
 
     interface Actions {
         fun onLink()
@@ -29,7 +29,7 @@ class OverlayService : Service(), OverlayService.Display {
         fun onTimeChange(delta: Int)
     }
 
-    interface Display {
+    interface OverlayDisplay {
         fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean = false)
         fun updateControls(depth: Int, seconds: Int)
         fun updateInfo(cloud: String, engineSummary: String, engineDetail: String)
@@ -37,7 +37,7 @@ class OverlayService : Service(), OverlayService.Display {
 
     companion object {
         var actions: Actions? = null
-        var display: Display? = null
+        var display: OverlayDisplay? = null
 
         fun start(context: Context) {
             context.startService(Intent(context, OverlayService::class.java))
@@ -64,7 +64,7 @@ class OverlayService : Service(), OverlayService.Display {
 
     override fun onCreate() {
         super.onCreate()
-        display = this
+        display = this as OverlayService.OverlayDisplay
         val density = resources.displayMetrics.density
         fun dp(value: Int) = (value * density).toInt()
         val panel = LinearLayout(this).apply {
