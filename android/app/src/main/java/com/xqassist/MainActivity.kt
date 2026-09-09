@@ -35,7 +35,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /** 皮卡鱼象棋助手：仿收费端主界面，顶部图标工具栏 + 棋盘 + 引擎/开局库/棋谱页签 */
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
     private lateinit var controller: GameController
     private lateinit var board: BoardView
@@ -46,6 +46,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var gamePage: ScrollView
     private lateinit var settingsPage: LinearLayout
     private lateinit var editPanel: LinearLayout
+    private lateinit var navBar: LinearLayout
+    private lateinit var tabBar: LinearLayout
+    private lateinit var pages: LinearLayout
     private lateinit var settingsScroll: ScrollView
     private lateinit var moveText: TextView
     private lateinit var engineTab: Button
@@ -89,6 +92,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        OverlayService.actions = this
         controller = GameController()
         buildUi()
         refreshUi()
@@ -158,7 +162,7 @@ class MainActivity : AppCompatActivity() {
         toolbar.addView(row1)
         toolbar.addView(row2)
 
-        val navBar = LinearLayout(this).apply {
+        navBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(Color.parseColor("#D9E6F2"))
         }
@@ -182,7 +186,7 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.96f)
         }
 
-        val tabBar = LinearLayout(this).apply {
+        tabBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(Color.parseColor("#F7F7F7"))
         }
@@ -235,9 +239,9 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(Color.parseColor("#EFEFEF"))
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
-        buildEditPanel(toPx)
+        buildEditPanel()
 
-        val pages = LinearLayout(this).apply {
+        pages = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.38f)
         }
@@ -667,6 +671,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderInfo() {
         updateToolStates()
+        updateOverlayState()
         if (bottomTab == TAB_ENGINE) renderEnginePage()
         if (bottomTab == TAB_OPENING) renderOpeningPage()
         if (bottomTab == TAB_GAME) renderGamePage()
@@ -818,8 +823,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun startBoardEditor() {
         controller.startEditMode()
+        statusMessage = "编辑模式：选下方棋子后点棋盘放置；点已有棋子可直接拿起"
+        navBar.visibility = View.GONE
+        tabBar.visibility = View.GONE
+        pages.visibility = View.GONE
+        buildEditPanel()
         editPanel.visibility = View.VISIBLE
-        statusMessage = "编辑模式：选下方棋子后点棋盘放置；点已有棋子可直接擦除"
         renderInfo()
     }
 
@@ -827,75 +836,101 @@ class MainActivity : AppCompatActivity() {
         controller.exitEditMode()
         editPanel.visibility = View.GONE
         statusMessage = "编辑完成"
+        navBar.visibility = View.VISIBLE
+        tabBar.visibility = View.VISIBLE
+        pages.visibility = View.VISIBLE
         renderInfo()
     }
 
-    private fun buildEditPanel(toPx: (Int) -> Int) {
+    private fun buildEditPanel() {
+        val toPx: (Int) -> Int = { value -> (value * resources.displayMetrics.density).toInt() }
         editPanel.removeAllViews()
         editPanel.orientation = LinearLayout.VERTICAL
-        editPanel.setBackgroundColor(Color.parseColor("#EFEFEF"))
-        editPanel.setPadding(toPx(4), toPx(3), toPx(4), toPx(3))
-        editPanel.visibility = if (controller.editMode) View.VISIBLE else View.GONE
+        editPanel.setBackgroundColor(Color.parseColor("#F5F5F5"))
+        editPanel.setPadding(toPx(3), toPx(2), toPx(3), toPx(2))
 
         val modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         modeRow.addView(editChoice("放子", !controller.editErase) {
             controller.editErase = false
-            statusMessage = "放子模式"
-            renderInfo()
+            buildEditPanel()
         })
         modeRow.addView(editChoice("擦除", controller.editErase) {
             controller.editErase = true
-            statusMessage = "擦除模式"
-            renderInfo()
+            buildEditPanel()
         })
         modeRow.addView(editChoice("红方行棋", controller.sideToMove == "w") {
             controller.setSideToMove("w")
-            statusMessage = "红方行棋"
-            renderInfo()
+            buildEditPanel()
         })
         modeRow.addView(editChoice("黑方行棋", controller.sideToMove == "b") {
             controller.setSideToMove("b")
-            statusMessage = "黑方行棋"
-            renderInfo()
+            buildEditPanel()
         })
         modeRow.addView(editTool("导入FEN") { importFenDialog() })
         modeRow.addView(editTool("导出FEN") { exportFenDialog() })
         modeRow.addView(editTool("完成") { finishBoardEditor() })
         editPanel.addView(modeRow)
 
-        val tray = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val names = arrayOf("帅","仕","相","马","车","炮","兵")
-        val types = arrayOf("k","a","b","n","r","c","p")
-        for (i in names.indices) {
-            val code = "w" + types[i]
-            tray.addView(editChoice(names[i], controller.editPiece == code) {
+        editPanel.addView(TextView(this).apply {
+            text = "红方棋子"
+            textSize = 12f
+            setPadding(0, toPx(1), 0, 0)
+        })
+        editPanel.addView(pieceTray("w", toPx))
+
+        editPanel.addView(TextView(this).apply {
+            text = "黑方棋子"
+            textSize = 12f
+            setPadding(0, toPx(1), 0, 0)
+        })
+        editPanel.addView(pieceTray("b", toPx))
+    }
+
+    private fun pieceTray(side: String, toPx: (Int) -> Int): LinearLayout {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val counts = pieceCounts(side)
+        val names = mapOf("k" to if (side == "w") "帅" else "将", "a" to if (side == "w") "仕" else "士", "b" to if (side == "w") "相" else "象", "n" to "马", "r" to "车", "c" to "炮", "p" to if (side == "w") "兵" else "卒")
+        val limits = mapOf("k" to 1, "a" to 2, "b" to 2, "n" to 2, "r" to 2, "c" to 2, "p" to 5)
+        for ((type, limit) in limits) {
+            val used = counts[type] ?: 0
+            val available = used < limit
+            val selected = controller.editPiece == side + type && available
+            val label = (names[type] ?: type) + " " + used + "/" + limit
+            row.addView(editChoice(label, selected) {
+                if (!available) {
+                    setStatusMessage((names[type] ?: type) + "已满，最多 " + limit + " 个")
+                    renderInfo()
+                    return@editChoice
+                }
                 controller.editErase = false
-                controller.editPiece = code
-                statusMessage = "已选红" + names[i] + "，点棋盘放置"
-                renderInfo()
+                controller.editPiece = side + type
+                buildEditPanel()
             })
         }
-        for (i in names.indices) {
-            val code = "b" + types[i]
-            tray.addView(editChoice(names[i], controller.editPiece == code) {
-                controller.editErase = false
-                controller.editPiece = code
-                statusMessage = "已选黑" + names[i] + "，点棋盘放置"
-                renderInfo()
-            })
+        return row
+    }
+
+    private fun pieceCounts(side: String): Map<String, Int> {
+        val counts = mutableMapOf<String, Int>()
+        for (rank in 0..9) for (file in 0..8) {
+            val piece = controller.displayPos.pieceAt(rank, file) ?: continue
+            if (piece.first().toString() == side) counts[piece.substring(1)] = (counts[piece.substring(1)] ?: 0) + 1
         }
-        editPanel.addView(tray)
+        return counts
     }
 
     private fun editChoice(label: String, active: Boolean, action: () -> Unit): Button =
         editTool(label, action).apply {
             setBackgroundColor(if (active) Color.parseColor("#C8E6C9") else Color.parseColor("#FAFAFA"))
+            isEnabled = true
+            alpha = if (active) 1f else 0.82f
         }
 
     private fun editTool(label: String, action: () -> Unit): Button = Button(this).apply {
         text = label
-        textSize = 11f
+        textSize = 10f
         isAllCaps = false
+        setPadding(0, 0, 0, 0)
         setBackgroundColor(Color.parseColor("#FAFAFA"))
         layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = 2 }
         setOnClickListener { action() }
@@ -963,6 +998,39 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("确定", null).show()
     }
 
+    override fun onLink() {
+        runOnUiThread { linkDialog() }
+    }
+
+    override fun onAnalyze() {
+        runOnUiThread { toggleAnalysisMode() }
+    }
+
+    override fun onPlayMove() {
+        runOnUiThread { playBestNow() }
+    }
+
+    override fun onDepthChange(delta: Int) {
+        runOnUiThread {
+            searchDepth = when {
+                delta < 0 -> 0
+                searchDepth <= 0 -> 6
+                else -> (searchDepth + delta).coerceIn(6, 18)
+            }
+            statusMessage = if (searchDepth == 0) "深度不限" else "深度 $searchDepth 层"
+            renderInfo()
+        }
+    }
+
+    override fun onTimeChange(delta: Int) {
+        runOnUiThread {
+            if (delta < 0) thinkMs = (thinkMs - 1000).coerceAtLeast(1000)
+            else thinkMs = (thinkMs + 1000).coerceAtMost(60000)
+            statusMessage = "思考时间 ${thinkMs / 1000} 秒"
+            renderInfo()
+        }
+    }
+
     private fun toggleOverlay() {
         if (!overlayOn) {
             if (!android.provider.Settings.canDrawOverlays(this)) {
@@ -976,6 +1044,28 @@ class MainActivity : AppCompatActivity() {
             OverlayService.stop(this); overlayOn = false
             Toast.makeText(this, "悬浮窗已关闭", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun updateOverlayState() {
+        val svc = OverlayService.actions ?: return
+        svc.updateControls(searchDepth, thinkMs / 1000)
+        svc.updateActions(lastLive, analysisMode, controller.thinking)
+        val cloudText = if (displayCloud) {
+            if (cloudLoading) "查询中" else cloudMoves.firstOrNull()?.let { Notation.moveToChinese(controller.displayPos, it.move) + " " + it.winrate } ?: "无"
+        } else "关"
+        val engineSummary = when {
+            !engineReady -> "未就绪"
+            controller.thinking -> "思考中"
+            lastResult.bestmove.isBlank() -> "-"
+            else -> lastResult.chinese(controller.displayPos)
+        }
+        val engineDetail = if (lastResult.bestmove.isBlank()) "" else {
+            val score = scoreTextFor(lastResult)
+            val time = String.format("%.1f秒", lastResult.timeMs / 1000.0)
+            val path = pvChinese(lastResult.pv).ifBlank { lastResult.chinese(controller.displayPos) }
+            "深度${lastResult.depth} · $score · $time\n$path"
+        }
+        svc.updateInfo(cloudText, engineSummary, engineDetail)
     }
 
     private fun setStatusMessage(message: String) {
