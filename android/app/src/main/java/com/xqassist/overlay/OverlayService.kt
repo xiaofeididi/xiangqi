@@ -38,7 +38,7 @@ class OverlayService : Service(), OverlayDisplay {
 
     companion object {
         var actions: Actions? = null
-        var display: OverlayDisplay? = null
+        var overlayDisplay: OverlayDisplay? = null
 
         fun start(context: Context) {
             context.startService(Intent(context, OverlayService::class.java))
@@ -65,7 +65,7 @@ class OverlayService : Service(), OverlayDisplay {
 
     override fun onCreate() {
         super.onCreate()
-        display = this
+        overlayDisplay = this
         val density = resources.displayMetrics.density
         fun dp(value: Int) = (value * density).toInt()
         val panel = LinearLayout(this).apply {
@@ -253,7 +253,7 @@ class OverlayService : Service(), OverlayDisplay {
     }
 
     override fun onDestroy() {
-        display = null
+        overlayDisplay = null
         root?.let { wm.removeView(it) }
         root = null
         params = null

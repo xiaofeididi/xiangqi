@@ -1047,7 +1047,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     }
 
     private fun updateOverlayState() {
-        val svc = OverlayService.display ?: return
+        val svc = OverlayService.overlayDisplay ?: return
         svc.updateControls(searchDepth, thinkMs / 1000)
         svc.updateActions(lastLive, analysisMode, controller.thinking)
         val cloudText = if (displayCloud) {
