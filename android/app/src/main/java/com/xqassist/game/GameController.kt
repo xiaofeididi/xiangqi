@@ -101,6 +101,17 @@ class GameController {
         return true
     }
 
+    /** 防长将/重复走法：记录前 6 步 ICCS，出现明显循环时给 UI 提示 */
+    fun recentIccs(count: Int = 6): List<String> =
+        moveHistory.takeLast(count).map { it.iccs() }
+
+    /** 最近一手是否与更早一手完全相同 */
+    fun lastMoveRepeated(): Boolean {
+        val list = moveHistory.toList()
+        if (list.size < 4) return false
+        return list[list.size - 1].iccs() == list[list.size - 3].iccs()
+    }
+
     fun applyMove(fromRank: Int, fromFile: Int, toRank: Int, toFile: Int) {
         history.addLast(pos.copy())
         val move = Quad(fromRank, fromFile, toRank, toFile)

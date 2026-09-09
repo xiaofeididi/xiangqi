@@ -142,6 +142,7 @@ class UcciEngine(
         depth: Int = 0,
         multiPv: Int = 1,
         infinite: Boolean = false,
+        history: List<String> = emptyList(),
         onInfo: ((EngineResult) -> Unit)? = null,
     ): EngineResult {
         if (process?.isAlive != true) {
@@ -159,7 +160,7 @@ class UcciEngine(
 
         send("stop")
         send("setoption name MultiPV value ${multiPv.coerceIn(1, 5)}")
-        send("position fen $fen")
+        send(if (history.isEmpty()) "position fen $fen" else "position fen $fen moves ${history.joinToString(" ")}")
         val go = when {
             infinite -> "go infinite"
             depth > 0 && movetimeMs > 0 -> "go depth $depth movetime ${movetimeMs.coerceAtLeast(100)}"

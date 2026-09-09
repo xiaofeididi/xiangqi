@@ -441,6 +441,19 @@ class MainActivity : AppCompatActivity() {
         refreshUi()
     }
 
+    private fun guardRepetition(): Boolean {
+        val list = controller.recentIccs(8)
+        if (list.size < 4) return false
+        val a = list[list.size - 1]
+        val b = list[list.size - 3]
+        if (a == b) {
+            statusMessage = "检测到重复着法，建议使用换招打破循环"
+            renderInfo()
+            return true
+        }
+        return false
+    }
+
     private fun afterMoveChanged(message: String) {
         statusMessage = "$message\n${gameStateText()}"
         lastResult = EngineResult()
@@ -472,12 +485,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun analyzeAndMove(side: String) {
         if (!engineReady || controller.thinking || controller.isGameOver) return
+        analysisMode = false
+        analysisJob?.cancel()
+        analysisJob = null
+        positionToken++
         controller.thinking = true
         val requestToken = positionToken
         setStatusMessage("${sideName(side)}思考中…")
         val fen = controller.fen
+        val history = controller.moves.map { it.iccs() }
         lifecycleScope.launch(Dispatchers.IO) {
-            val result = requestEngine(fen, side)
+            val result = requestEngine(fen, side, history = history)
             withContext(Dispatchers.Main) {
                 controller.thinking = false
                 if (requestToken != positionToken) return@withContext
@@ -519,9 +537,10 @@ class MainActivity : AppCompatActivity() {
         if (!analysisMode || controller.thinking) return
         val fen = controller.fen
         val side = controller.sideToMove
+        val history = controller.moves.map { it.iccs() }
         val requestToken = positionToken
         analysisJob = lifecycleScope.launch(Dispatchers.IO) {
-            val result = requestEngine(fen, side, infinite = true)
+            val result = requestEngine(fen, side, infinite = true, history = history)
             withContext(Dispatchers.Main) {
                 if (requestToken != positionToken) return@withContext
                 renderEngine(result, live = true)
@@ -547,7 +566,7 @@ class MainActivity : AppCompatActivity() {
         analyzeAndMove(controller.sideToMove)
     }
 
-    private suspend fun requestEngine(fen: String, side: String, infinite: Boolean = false): EngineResult = engineMutex.withLock {
+    private suspend fun requestEngine(fen: String, side: String, infinite: Boolean = false, history: List<String> = emptyList()): EngineResult = engineMutex.withLock {
         val current = engine ?: return@withLock EngineResult()
         if (!current.isReady) return@withLock EngineResult()
         current.analyze(
@@ -556,6 +575,7 @@ class MainActivity : AppCompatActivity() {
             depth = searchDepth,
             multiPv = multiPv,
             infinite = infinite,
+            history = history,
             onInfo = { partial ->
                 runOnUiThread {
                     if (partial.bestmove.isNotBlank()) renderEngine(partial, live = true)
