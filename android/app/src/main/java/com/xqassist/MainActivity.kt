@@ -62,7 +62,7 @@ class MainActivity : AppCompatActivity() {
     private var lastResult = EngineResult()
     private var lastLive = false
     private var analysisMode = false
-    private var engineSide = ""
+    private val engineSides = mutableSetOf<String>()
     private var bottomTab = TAB_ENGINE
     private var statusMessage = "正在启动皮卡鱼…"
 
@@ -240,7 +240,7 @@ class MainActivity : AppCompatActivity() {
         pages.addView(gamePage)
         pages.addView(settingsScroll)
 
-        root.addView(toolbar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)))
+        root.addView(toolbar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(board)
         root.addView(navBar)
         root.addView(tabBar)
@@ -457,16 +457,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setEngineSide(side: String) {
-        engineSide = if (engineSide == side) "" else side
-        statusMessage = if (engineSide.isBlank()) "引擎已停止执子" else "引擎执${sideName(engineSide)}"
+        if (!engineSides.remove(side)) engineSides.add(side)
+        statusMessage = if (engineSides.isEmpty()) "引擎已停止执子" else "引擎执" + engineSides.sorted().joinToString("、") { sideName(it) }
         renderInfo()
         maybeAutoMove()
     }
 
     private fun maybeAutoMove() {
         if (!engineReady || controller.thinking || controller.isGameOver || controller.editMode) return
-        if (engineSide.isNotBlank() && controller.sideToMove == engineSide) {
-            analyzeAndMove(engineSide)
+        if (controller.sideToMove in engineSides) {
+            analyzeAndMove(controller.sideToMove)
         }
     }
 
@@ -631,8 +631,8 @@ class MainActivity : AppCompatActivity() {
     private fun updateToolStates() {
         val on = Color.parseColor("#C8E6C9")
         val off = Color.parseColor("#F5F5F5")
-        if (::engineRedButton.isInitialized) engineRedButton.setBackgroundColor(if (engineSide == "w") on else off)
-        if (::engineBlackButton.isInitialized) engineBlackButton.setBackgroundColor(if (engineSide == "b") on else off)
+        if (::engineRedButton.isInitialized) engineRedButton.setBackgroundColor(if ("w" in engineSides) on else off)
+        if (::engineBlackButton.isInitialized) engineBlackButton.setBackgroundColor(if ("b" in engineSides) on else off)
         if (::analysisButton.isInitialized) analysisButton.setBackgroundColor(if (analysisMode) on else off)
     }
 
@@ -772,7 +772,7 @@ class MainActivity : AppCompatActivity() {
     private fun newGame() {
         controller.newGame()
         analysisMode = false
-        engineSide = ""
+        engineSides.clear()
         statusMessage = "新局开始，红方先行"
         afterMoveChanged("新局")
     }
