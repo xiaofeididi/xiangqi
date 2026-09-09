@@ -10,9 +10,15 @@ import com.xqassist.core.Position
  * match colors against the bundled piece templates (assets/pieces matching the A-license webp templates).
  * Plan: upgrade to OpenCV template matching / TFLite when accuracy requires.
  */
-class TemplatePieceReader(context: Context) : ChessboardReader {
+class TemplatePieceReader(
+    context: Context,
+    private val mode: Int = MODE_BASIC,
+) : ChessboardReader {
 
     private val templates: Map<String, Bitmap> = loadTemplates(context)
+    private val matchThreshold = if (mode == MODE_WIDE) 0.48 else 0.55
+    private val sampleRadius = if (mode == MODE_WIDE) 8 else 6
+    private val sampleStep = if (mode == MODE_WIDE) 2 else 1
 
     override fun readBoard(frame: Bitmap, board: BoardRect): Position {
         val cells = MutableList(10) { arrayOfNulls<String>(9) }
@@ -46,14 +52,15 @@ class TemplatePieceReader(context: Context) : ChessboardReader {
             val score = correlate(frame, px, py, tmpl)
             if (score > bestScore) { bestScore = score; best = code }
         }
-        return if (bestScore > MATCH_THRESHOLD) best else null
+        return if (bestScore > matchThreshold) best else null
     }
 
     private fun correlate(frame: Bitmap, px: Int, py: Int, tmpl: Bitmap): Double {
-        val size = 6
+        val size = sampleRadius
         var sum = 0.0; var n = 0
-        for (dy in -size..size) {
-            for (dx in -size..size) {
+        val step = sampleStep
+        for (dy in -size..size step step) {
+            for (dx in -size..size step step) {
                 val fx = px + dx; val fy = py + dy
                 if (fx !in 0 until frame.width || fy !in 0 until frame.height) continue
                 val tx = tmpl.width / 2 + dx
@@ -85,6 +92,7 @@ class TemplatePieceReader(context: Context) : ChessboardReader {
     }
 
     companion object {
-        private const val MATCH_THRESHOLD = 0.55
+        const val MODE_BASIC = 0
+        const val MODE_WIDE = 1
     }
 }

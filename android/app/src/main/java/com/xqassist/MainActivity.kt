@@ -1,7 +1,11 @@
 package com.xqassist
 
+import android.app.Activity
+import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
+import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
@@ -16,8 +20,10 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import com.xqassist.capture.CaptureService
 import com.xqassist.core.Notation
 import com.xqassist.connection.LiveLinkService
 import com.xqassist.engine.CloudBook
@@ -28,6 +34,8 @@ import com.xqassist.engine.UcciEngine
 import com.xqassist.game.GameController
 import com.xqassist.overlay.OverlayService
 import com.xqassist.ui.BoardView
+import com.xqassist.vision.BoardRect
+import com.xqassist.vision.TemplatePieceReader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -75,6 +83,15 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     private var multiPv = 5
     private var flipped = false
     private var overlayOn = false
+    private var capturedBoardRect: BoardRect? = null
+    private var capturedBoardFlipped = false
+    private var calibrationFrame: Bitmap? = null
+    private var calibrationPoints = mutableListOf<Pair<Int, Int>>()
+    private var calibrationRoot: android.widget.FrameLayout? = null
+    private var lastRecognizedFen = ""
+    private var lastRecognizedMs = 0L
+    private var developerMode = false
+    private var developerTapCount = 0
 
     private var displayCloud = true
     private var executeCloud = false
@@ -90,6 +107,25 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
     /** 每次局面变更后递增，用于丢弃晚到的旧分析 */
     private var positionToken = 0
+
+    private val basicReader by lazy { TemplatePieceReader(this, TemplatePieceReader.MODE_BASIC) }
+    private val wideReader by lazy { TemplatePieceReader(this, TemplatePieceReader.MODE_WIDE) }
+    private var visionMode = TemplatePieceReader.MODE_BASIC
+    private val mediaProjectionManager by lazy {
+        getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+    }
+    private val capturePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            CaptureService.start(this, result.resultCode, result.data!!)
+            setStatusMessage("屏幕识别已授权")
+            Toast.makeText(this, "已授权，请返回目标象棋界面点击识别", Toast.LENGTH_SHORT).show()
+        } else {
+            setStatusMessage("屏幕识别未授权")
+            renderInfo()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -149,7 +185,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         row1.addView(tool("菜单") { menuDialog() })
         row1.addView(tool("新局") { newGame() })
         row1.addView(tool("编辑") { editDialog() })
-        row1.addView(tool("翻转") { flipped = !flipped; refreshUi() })
+        row1.addView(tool("屏幕识别") { startScreenRecognition() })
         row1.addView(tool("悬浮窗") { toggleOverlay() })
         val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         engineRedButton = tool("引擎执红") { setEngineSide("w") }
@@ -364,7 +400,26 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         }
         actionRow.addView(actionButton("悔棋") { undo() })
         actionRow.addView(actionButton("悬浮窗") { toggleOverlay() })
+        actionRow.addView(actionButton("开发者模式") {
+            developerTapCount++
+            if (developerTapCount >= 5) {
+                developerTapCount = 0
+                developerMode = true
+                Toast.makeText(this@MainActivity, "开发者模式已开启", Toast.LENGTH_SHORT).show()
+                buildSettingsPage(toPx)
+            }
+        })
         settingsPage.addView(actionRow)
+
+        if (developerMode) {
+            val labRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, toPx(4), 0, toPx(4))
+            }
+            labRow.addView(actionButton("识别实验室") { developerLabDialog() })
+            labRow.addView(actionButton("识别测试") { startScreenRecognition() })
+            settingsPage.addView(labRow)
+        }
     }
 
     private fun choiceButton(label: String, active: Boolean, action: () -> Unit): Button = Button(this).apply {
@@ -783,8 +838,8 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     private fun menuDialog() {
         val options = arrayOf(
             "新局", "打开局面", "保存局面", "编辑局面", "翻转局面",
-            "引擎执黑", "引擎执红", "分析模式", "立即出招", "强制变招",
-            "连线", "悬浮窗", "设置",
+            "引擎执黑", "引擎红黑", "分析模式", "立即出招", "强制变招",
+            "屏幕识别", "连线", "悬浮窗", "设置",
         )
         AlertDialog.Builder(this).setTitle("菜单").setItems(options) { _, which ->
             when (which) {
@@ -798,9 +853,10 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                 7 -> toggleAnalysisMode()
                 8 -> playBestNow()
                 9 -> forceChangeMove()
-                10 -> linkDialog()
-                11 -> toggleOverlay()
-                12 -> settingsDialog()
+                10 -> startScreenRecognition()
+                11 -> linkDialog()
+                12 -> toggleOverlay()
+                13 -> settingsDialog()
             }
         }.show()
     }
@@ -832,6 +888,205 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         buildEditPanel()
         editPanel.visibility = View.VISIBLE
         renderInfo()
+    }
+
+    private fun startScreenRecognition() {
+        if (!CaptureService.isRunning) {
+            try {
+                capturePermissionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+            } catch (e: Throwable) {
+                android.util.Log.e("Capture", "capture: permission launch failed", e)
+                Toast.makeText(this, "屏幕识别授权失败：${e.message}", Toast.LENGTH_LONG).show()
+            }
+            return
+        }
+        calibrationFrame = CaptureService.copyLatestBitmap()
+        if (calibrationFrame == null) {
+            setStatusMessage("屏幕识别：请返回目标棋盘后重试")
+            Toast.makeText(this, "没有取到目标画面，请等一秒再点识别", Toast.LENGTH_SHORT).show()
+            renderInfo()
+            return
+        }
+        calibrationPoints.clear()
+        showCalibrationOverlay()
+        setStatusMessage("屏幕识别：点击截图中的棋盘左上角")
+        renderInfo()
+    }
+
+    private fun developerLabDialog() {
+        val options = arrayOf(
+            "方案A：截图两点标定 + 模板匹配",
+            "方案B：宽采样模板匹配",
+            "方案C：轻量检测模型（规划中）",
+            "复制最近识别 FEN",
+            "复制当前 FEN",
+        )
+        AlertDialog.Builder(this).setTitle("识别实验室").setItems(options) { _, which ->
+            when (which) {
+                0 -> {
+                    visionMode = TemplatePieceReader.MODE_BASIC
+                    startScreenRecognition()
+                }
+                1 -> {
+                    visionMode = TemplatePieceReader.MODE_WIDE
+                    startScreenRecognition()
+                }
+                2 -> setStatusMessage("方案C规划中：TFLite轻量检测")
+                3 -> if (lastRecognizedFen.isBlank()) {
+                        Toast.makeText(this, "还没有识别结果", Toast.LENGTH_SHORT).show()
+                    } else {
+                        copyText(lastRecognizedFen)
+                        Toast.makeText(this, "最近识别 FEN 已复制 · ${lastRecognizedMs}ms", Toast.LENGTH_SHORT).show()
+                    }
+                4 -> {
+                    copyText(controller.exportFen())
+                    Toast.makeText(this, "FEN 已复制", Toast.LENGTH_SHORT).show()
+                }
+            }
+            renderInfo()
+        }.show()
+    }
+
+    private fun showCalibrationOverlay() {
+        val frame = calibrationFrame ?: return
+        val density = resources.displayMetrics.density
+        val root = android.widget.FrameLayout(this).apply {
+            setBackgroundColor(0xF0101418.toInt())
+        }
+        val image = android.widget.ImageView(this).apply {
+            setImageBitmap(frame)
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+        }
+        root.addView(image, android.widget.FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+        ))
+        val tip = TextView(this).apply {
+            text = "点击棋盘左上角交叉点"
+            textSize = 17f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setBackgroundColor(0xAA000000.toInt())
+            setPadding(0, (8 * density).toInt(), 0, (8 * density).toInt())
+        }
+        root.addView(tip, android.widget.FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { gravity = Gravity.TOP })
+        val cancel = TextView(this).apply {
+            text = "取消"
+            textSize = 15f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setBackgroundColor(0xAA000000.toInt())
+            setPadding((16 * density).toInt(), (10 * density).toInt(), (16 * density).toInt(), (10 * density).toInt())
+            setOnClickListener {
+                calibrationPoints.clear()
+                closeCalibrationOverlay()
+            }
+        }
+        root.addView(cancel, android.widget.FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { gravity = Gravity.BOTTOM or Gravity.END; setMargins(0, 0, (16 * density).toInt(), 0) })
+        root.setOnTouchListener { _, event ->
+            if (event.action != android.view.MotionEvent.ACTION_UP) return@setOnTouchListener true
+            val drawable = image.drawable ?: return@setOnTouchListener true
+            val iw = drawable.intrinsicWidth.toFloat()
+            val ih = drawable.intrinsicHeight.toFloat()
+            if (iw <= 0f || ih <= 0f || image.width <= 0 || image.height <= 0) return@setOnTouchListener true
+            val scale = minOf(image.width / iw, image.height / ih)
+            val dx = (image.width - iw * scale) / 2f
+            val dy = (image.height - ih * scale) / 2f
+            val px = ((event.x - dx) / scale).toInt()
+            val py = ((event.y - dy) / scale).toInt()
+            if (px >= 0 && py >= 0 && px < frame.width && py < frame.height) {
+                handleScreenCalibration(px, py, tip)
+            }
+            true
+        }
+        calibrationRoot = root
+        setContentView(root)
+    }
+
+    override fun onBackPressed() {
+        if (calibrationRoot != null) {
+            calibrationPoints.clear()
+            closeCalibrationOverlay()
+            return
+        }
+        super.onBackPressed()
+    }
+
+    private fun handleScreenCalibration(px: Int, py: Int, tip: TextView) {
+        calibrationPoints.add(px to py)
+        when (calibrationPoints.size) {
+            1 -> tip.text = "已记录左上角，请点击右下角交叉点"
+            2 -> {
+                val p0 = calibrationPoints[0]
+                val p1 = calibrationPoints[1]
+                capturedBoardRect = BoardRect(
+                    left = minOf(p0.first, p1.first),
+                    top = minOf(p0.second, p1.second),
+                    right = maxOf(p0.first, p1.first),
+                    bottom = maxOf(p0.second, p1.second),
+                )
+                capturedBoardFlipped = flipped
+                calibrationPoints.clear()
+                closeCalibrationOverlay()
+                lifecycleScope.launch { recognizeOnce() }
+            }
+        }
+    }
+
+    private fun closeCalibrationOverlay() {
+        calibrationRoot = null
+        buildUi()
+        refreshUi()
+        renderInfo()
+    }
+
+    private suspend fun recognizeOnce() {
+        val startedAt = System.currentTimeMillis()
+        val rect = capturedBoardRect
+        if (rect == null) {
+            setStatusMessage("屏幕识别：棋盘范围未标定")
+            return
+        }
+        val frame = withContext(Dispatchers.IO) { calibrationFrame }
+        if (frame == null) {
+            setStatusMessage("屏幕识别：没有取到画面")
+            renderInfo()
+            return
+        }
+        val reader = if (visionMode == TemplatePieceReader.MODE_WIDE) wideReader else basicReader
+        val recognized = withContext(Dispatchers.IO) { reader.readBoard(frame, rect) }
+        android.util.Log.i("Vision", "recognize: ${System.currentTimeMillis() - startedAt}ms fen=${recognized.toFen()}")
+        val elapsed = System.currentTimeMillis() - startedAt
+        lastRecognizedFen = recognized.toFen()
+        lastRecognizedMs = elapsed
+        showRecognitionResult(lastRecognizedFen, elapsed)
+    }
+
+    private fun showRecognitionResult(fen: String, elapsed: Long) {
+        AlertDialog.Builder(this)
+            .setTitle("识别测试结果 · 方案${if (visionMode == TemplatePieceReader.MODE_WIDE) "B" else "A"} · ${elapsed}ms")
+            .setMessage("FEN：\n$fen\n\n请先核对棋盘和行棋方向；确认无误后再应用。")
+            .setPositiveButton("应用") { _, _ ->
+                if (controller.editMode) {
+                    Toast.makeText(this, "编辑模式不可应用", Toast.LENGTH_SHORT).show()
+                } else if (controller.importFen(fen)) {
+                    afterMoveChanged("识别结果已应用 · ${elapsed}ms")
+                } else {
+                    Toast.makeText(this, "FEN 应用失败", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("复制") { _, _ ->
+                copyText(fen)
+                Toast.makeText(this, "识别 FEN 已复制", Toast.LENGTH_SHORT).show()
+            }
+            .setNeutralButton("关闭", null)
+            .show()
     }
 
     private fun finishBoardEditor() {
@@ -1008,6 +1263,24 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                 renderInfo()
             } else {
                 linkDialog()
+            }
+        }
+    }
+
+    override fun onRecognize() {
+        val bringFront = Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        runOnUiThread {
+            val frame = if (CaptureService.isRunning) CaptureService.copyLatestBitmap() else null
+            startActivity(bringFront)
+            if (frame != null) {
+                calibrationFrame = frame
+                calibrationPoints.clear()
+                showCalibrationOverlay()
+                setStatusMessage("屏幕识别：点击截图中的棋盘左上角")
+                renderInfo()
+            } else {
+                startScreenRecognition()
             }
         }
     }

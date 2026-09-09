@@ -29,6 +29,7 @@ class OverlayService : Service(), OverlayDisplay {
 
     interface Actions {
         fun onLink()
+        fun onRecognize()
         fun onAnalyze()
         fun onPlayMove()
         fun onDepthChange(delta: Int)
@@ -62,6 +63,7 @@ class OverlayService : Service(), OverlayDisplay {
     private var linkButton: Button? = null
     private var analyzeButton: Button? = null
     private var playButton: Button? = null
+    private var recognizeButton: Button? = null
     private var expanded = true
     private var opacity = 1f
     private var startX = 0
@@ -114,9 +116,11 @@ class OverlayService : Service(), OverlayDisplay {
 
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         linkButton = actionButton("连线")
+        recognizeButton = actionButton("识别")
         analyzeButton = actionButton("分析")
         playButton = actionButton("出子")
         buttons.addView(linkButton)
+        buttons.addView(recognizeButton)
         buttons.addView(analyzeButton)
         buttons.addView(playButton)
         card.addView(buttons)
@@ -167,6 +171,7 @@ class OverlayService : Service(), OverlayDisplay {
         resize.setOnTouchListener { _, event -> resizeHandler(event, p, panel, metrics.widthPixels - dp(16)) }
 
         linkButton?.setOnClickListener { actions?.onLink() }
+        recognizeButton?.setOnClickListener { actions?.onRecognize() }
         analyzeButton?.setOnClickListener { actions?.onAnalyze() }
         playButton?.setOnClickListener { actions?.onPlayMove() }
 
@@ -404,6 +409,7 @@ class OverlayService : Service(), OverlayDisplay {
         timeText = null
         opacityText = null
         linkButton = null
+        recognizeButton = null
         analyzeButton = null
         playButton = null
         super.onDestroy()
