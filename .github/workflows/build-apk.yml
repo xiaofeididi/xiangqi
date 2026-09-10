@@ -3,8 +3,6 @@ name: Build APK
 on:
   workflow_dispatch:
   push:
-    paths:
-      - "android/**"
 
 jobs:
   build:
