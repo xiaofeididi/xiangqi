@@ -992,6 +992,17 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             }
             return
         }
+        if (calibrationFrame != null && capturedBoardRect != null) {
+            lifecycleScope.launch { recognizeOnce() }
+            return
+        }
+        if (calibrationFrame != null) {
+            calibrationPoints.clear()
+            showCalibrationOverlay()
+            setStatusMessage("屏幕识别：使用已标定的目标画面")
+            renderInfo()
+            return
+        }
         calibrationFrame = CaptureService.copyLatestBitmap()
         if (calibrationFrame == null) {
             setStatusMessage("屏幕识别：请返回目标棋盘后重试")
@@ -1140,6 +1151,9 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
     private suspend fun recognizeOnce() {
         val startedAt = System.currentTimeMillis()
+        if (CaptureService.isRunning) {
+            CaptureService.copyLatestBitmap()?.let { calibrationFrame = it }
+        }
         val rect = capturedBoardRect
         if (rect == null) {
             setStatusMessage("屏幕识别：棋盘范围未标定")
@@ -1360,11 +1374,8 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     }
 
     override fun onRecognize() {
-        val bringFront = Intent(this, MainActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         runOnUiThread {
             val frame = if (CaptureService.isRunning) CaptureService.copyLatestBitmap() else null
-            startActivity(bringFront)
             if (frame != null) {
                 calibrationFrame = frame
                 calibrationPoints.clear()
