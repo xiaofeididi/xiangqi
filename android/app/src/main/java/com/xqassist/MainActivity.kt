@@ -260,10 +260,10 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         }
         val nav = listOf("⇤" to { browseFirst() }, "‹" to { browsePrevious() }, "›" to { browseNext() }, "⇥" to { browseLast() }, "♻" to { undo() })
         nav.forEach { item ->
-            val text = item.first
+            val label = item.first
             val action = item.second
             val b = TextView(this).apply {
-                text = text
+                text = label
                 textSize = 18f
                 setTextColor(Color.parseColor("#333333"))
                 gravity = Gravity.CENTER
