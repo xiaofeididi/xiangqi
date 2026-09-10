@@ -51,14 +51,14 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     private lateinit var openingPage: LinearLayout
     private lateinit var engineScroll: ScrollView
     private lateinit var openingScroll: ScrollView
-    private lateinit var gamePage: ScrollView
+    private lateinit var gamePage: LinearLayout
     private lateinit var settingsPage: LinearLayout
     private lateinit var editPanel: LinearLayout
     private lateinit var navBar: LinearLayout
     private lateinit var tabBar: LinearLayout
     private lateinit var pages: LinearLayout
     private lateinit var settingsScroll: ScrollView
-    private lateinit var moveText: TextView
+    private lateinit var movesListContainer: LinearLayout
     private lateinit var engineTab: Button
     private lateinit var openingTab: Button
     private lateinit var gameTab: Button
@@ -246,15 +246,39 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             setBackgroundColor(Color.parseColor("#FBF9F4"))
             setPadding(dp(8), dp(4), dp(8), dp(8))
         }
-        moveText = TextView(this).apply {
-            textSize = 14f
-            setTextColor(Color.parseColor("#333333"))
-            setLineSpacing(dp(2).toFloat(), 1f)
-        }
-        gamePage = ScrollView(this).apply {
+        val movesList = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#FBF9F4"))
-            addView(moveText)
-            setPadding(dp(10), dp(8), dp(10), dp(10))
+            setPadding(dp(10), dp(6), dp(10), dp(10))
+        }
+        movesListContainer = movesList
+        val gameNav = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.parseColor("#F4EFE6"))
+            setPadding(dp(6), dp(4), dp(6), dp(4))
+        }
+        val nav = listOf("⇤" to { browseFirst() }, "‹" to { browsePrevious() }, "›" to { browseNext() }, "⇥" to { browseLast() }, "♻" to { undo() })
+        nav.forEach { (text, action) ->
+            val b = TextView(this).apply {
+                text = text
+                textSize = 18f
+                setTextColor(Color.parseColor("#333333"))
+                gravity = Gravity.CENTER
+                setBackgroundColor(Color.parseColor("#FFFFFF"))
+                setPadding(dp(12), dp(4), dp(12), dp(4))
+                val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                lp.marginEnd = dp(6)
+                layoutParams = lp
+                setOnClickListener { action(); }
+            }
+            gameNav.addView(b)
+        }
+        gamePage = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#FBF9F4"))
+            addView(gameNav, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(ScrollView(this).apply { addView(movesList) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }
         settingsPage = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -792,38 +816,98 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     }
 
     private fun renderGamePage() {
-        val builder = StringBuilder()
-        controller.moves.forEachIndexed { index, move ->
-            val pre = controller.preMovePos(index)
-            val number = (index / 2) + 1
-            if (index % 2 == 0) builder.append("$number. ")
-            builder.append(Notation.moveToChinese(pre, move.iccs())).append("  ")
-            if (index % 2 == 1) builder.append('\n')
+        movesListContainer.removeAllViews()
+        if (controller.activeVariation != null) {
+            val back = TextView(this).apply {
+                text = "← 返回主线"
+                textSize = 13f
+                setTextColor(Color.parseColor("#1B5E20"))
+                setPadding(0, dp(4), 0, dp(6))
+                setOnClickListener { controller.activateMainline(); refreshUi(); renderInfo(); renderGamePage() }
+            }
+            movesListContainer.addView(back)
         }
-        moveText.text = builder.toString().ifBlank { "暂无棋谱" }
+        val moves = controller.moves
+        if (moves.isEmpty()) {
+            val empty = TextView(this).apply { text = "暂无棋谱"; textSize = 14f; setTextColor(Color.parseColor("#777777")) }
+            movesListContainer.addView(empty)
+            return
+        }
+        moves.forEachIndexed { index, move ->
+            val pre = controller.preMovePos(index)
+            val label = Notation.moveToChinese(pre, move.iccs())
+            val atEnd = index == moves.size - 1 && controller.browseIndex == -1
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            val step = TextView(this).apply {
+                text = ((index / 2) + 1).toString() + if (index % 2 == 0) ". " else "… "
+                textSize = 12f
+                setTextColor(Color.parseColor("#888888"))
+            }
+            val text = TextView(this).apply {
+                text = label
+                textSize = 15f
+                setTextColor(if (atEnd) Color.parseColor("#0B4E8C") else Color.parseColor("#333333"))
+                setPadding(0, dp(8), dp(4), dp(8))
+            }
+            val branch = TextView(this).apply {
+                text = "变"
+                textSize = 10f
+                setTextColor(Color.WHITE)
+                setBackgroundColor(Color.parseColor("#D84315"))
+                setPadding(dp(4), dp(1), dp(4), dp(1))
+                visibility = if (controller.activeVariation != null && index == 0) View.VISIBLE else View.GONE
+            }
+            row.addView(step)
+            row.addView(text)
+            row.addView(branch)
+            row.setOnClickListener {
+                controller.browseTo(if (controller.browseIndex == index && controller.activeVariation != null) -1 else index)
+                refreshUi(); renderInfo(); renderGamePage()
+            }
+            movesListContainer.addView(row)
+        }
+        if (controller.variations.isNotEmpty() && controller.activeVariation == null) {
+            val head = TextView(this).apply {
+                text = "变招"
+                textSize = 13f
+                setTextColor(Color.parseColor("#B26A00"))
+                setPadding(0, dp(12), 0, dp(4))
+            }
+            movesListContainer.addView(head)
+            controller.variations.forEachIndexed { vi, branch ->
+                val row = TextView(this).apply {
+                    text = controller.variationNotation(branch)
+                    textSize = 14f
+                    setTextColor(Color.parseColor("#333333"))
+                    setPadding(0, dp(5), 0, dp(5))
+                    setOnClickListener { controller.activateVariation(vi); refreshUi(); renderInfo(); renderGamePage() }
+                }
+                movesListContainer.addView(row)
+            }
+        }
     }
 
     private fun browseFirst() {
         if (controller.browseMax >= 0) controller.browseTo(0)
-        refreshUi(); renderInfo()
+        refreshUi(); renderInfo(); renderGamePage()
     }
 
     private fun browsePrevious() {
         if (controller.browseIndex < 0) controller.browseTo((controller.browseMax - 1).coerceAtLeast(0))
         else controller.browseTo(controller.browseIndex - 1)
-        refreshUi(); renderInfo()
+        refreshUi(); renderInfo(); renderGamePage()
     }
 
     private fun browseNext() {
         if (controller.browseIndex < 0) return
         val next = controller.browseIndex + 1
         controller.browseTo(if (next >= controller.browseMax) -1 else next)
-        refreshUi(); renderInfo()
+        refreshUi(); renderInfo(); renderGamePage()
     }
 
     private fun browseLast() {
         controller.browseTo(-1)
-        refreshUi(); renderInfo()
+        refreshUi(); renderInfo(); renderGamePage()
     }
 
     private fun refreshUi() {
@@ -872,7 +956,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     private fun undo() {
         if (!controller.undo()) Toast.makeText(this, "没有可悔的棋", Toast.LENGTH_SHORT).show()
         controller.clearSelection()
-        refreshUi(); renderInfo()
+        afterMoveChanged("悔棋")
     }
 
     private fun editDialog() {
