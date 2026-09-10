@@ -29,8 +29,6 @@ class CaptureService : Service() {
     private var display: VirtualDisplay? = null
     private var imageThread: HandlerThread? = null
     private var imageHandler: Handler? = null
-    private val frameLock = Any()
-    private var latestFrame: Bitmap? = null
 
     companion object {
         private const val CHANNEL = "xq_capture"
@@ -38,6 +36,9 @@ class CaptureService : Service() {
         private const val TAG = "Capture"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
+
+        private val frameLock = Any()
+        private var latestFrame: Bitmap? = null
 
         @Volatile
         var isRunning = false
