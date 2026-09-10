@@ -44,8 +44,10 @@ class CaptureService : Service() {
         var isRunning = false
             private set
 
+        @JvmStatic
         fun latestBitmap(): Bitmap? = synchronized(frameLock) { latestFrame }
 
+        @JvmStatic
         fun copyLatestBitmap(): Bitmap? {
             val source = synchronized(frameLock) { latestFrame } ?: return null
             return source.copy(source.config ?: Bitmap.Config.ARGB_8888, false)
