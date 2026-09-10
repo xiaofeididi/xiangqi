@@ -259,7 +259,9 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             setPadding(dp(6), dp(4), dp(6), dp(4))
         }
         val nav = listOf("⇤" to { browseFirst() }, "‹" to { browsePrevious() }, "›" to { browseNext() }, "⇥" to { browseLast() }, "♻" to { undo() })
-        nav.forEach { (text, action) ->
+        nav.forEach { item ->
+            val text = item.first
+            val action = item.second
             val b = TextView(this).apply {
                 text = text
                 textSize = 18f
@@ -849,7 +851,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                 textSize = 12f
                 setTextColor(Color.parseColor("#888888"))
             }
-            val text = TextView(this).apply {
+            val moveView = TextView(this).apply {
                 text = label
                 textSize = 15f
                 setTextColor(if (atEnd) Color.parseColor("#0B4E8C") else Color.parseColor("#333333"))
@@ -864,7 +866,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                 visibility = if (controller.activeVariation != null && index == 0) View.VISIBLE else View.GONE
             }
             row.addView(step)
-            row.addView(text)
+            row.addView(moveView)
             row.addView(branch)
             row.setOnClickListener {
                 controller.browseTo(if (controller.browseIndex == index && controller.activeVariation != null) -1 else index)
