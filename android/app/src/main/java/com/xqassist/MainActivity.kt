@@ -278,7 +278,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#FBF9F4"))
             addView(gameNav, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(ScrollView(this).apply { addView(movesList) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            addView(ScrollView(this@MainActivity).apply { addView(movesList) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }
         settingsPage = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -815,6 +815,8 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         }
     }
 
+    private fun dpToPx(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
     private fun renderGamePage() {
         movesListContainer.removeAllViews()
         if (controller.activeVariation != null) {
@@ -822,14 +824,18 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                 text = "← 返回主线"
                 textSize = 13f
                 setTextColor(Color.parseColor("#1B5E20"))
-                setPadding(0, dp(4), 0, dp(6))
+                setPadding(0, this@MainActivity.dpToPx(4), 0, this@MainActivity.dpToPx(6))
                 setOnClickListener { controller.activateMainline(); refreshUi(); renderInfo(); renderGamePage() }
             }
             movesListContainer.addView(back)
         }
         val moves = controller.moves
         if (moves.isEmpty()) {
-            val empty = TextView(this).apply { text = "暂无棋谱"; textSize = 14f; setTextColor(Color.parseColor("#777777")) }
+            val empty = TextView(this).apply {
+                text = "暂无棋谱"
+                textSize = 14f
+                setTextColor(Color.parseColor("#777777"))
+            }
             movesListContainer.addView(empty)
             return
         }
@@ -847,14 +853,14 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                 text = label
                 textSize = 15f
                 setTextColor(if (atEnd) Color.parseColor("#0B4E8C") else Color.parseColor("#333333"))
-                setPadding(0, dp(8), dp(4), dp(8))
+                setPadding(0, this@MainActivity.dpToPx(8), this@MainActivity.dpToPx(4), this@MainActivity.dpToPx(8))
             }
             val branch = TextView(this).apply {
                 text = "变"
                 textSize = 10f
                 setTextColor(Color.WHITE)
                 setBackgroundColor(Color.parseColor("#D84315"))
-                setPadding(dp(4), dp(1), dp(4), dp(1))
+                setPadding(this@MainActivity.dpToPx(4), this@MainActivity.dpToPx(1), this@MainActivity.dpToPx(4), this@MainActivity.dpToPx(1))
                 visibility = if (controller.activeVariation != null && index == 0) View.VISIBLE else View.GONE
             }
             row.addView(step)
@@ -871,7 +877,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                 text = "变招"
                 textSize = 13f
                 setTextColor(Color.parseColor("#B26A00"))
-                setPadding(0, dp(12), 0, dp(4))
+                setPadding(0, this@MainActivity.dpToPx(12), 0, this@MainActivity.dpToPx(4))
             }
             movesListContainer.addView(head)
             controller.variations.forEachIndexed { vi, branch ->
@@ -879,7 +885,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                     text = controller.variationNotation(branch)
                     textSize = 14f
                     setTextColor(Color.parseColor("#333333"))
-                    setPadding(0, dp(5), 0, dp(5))
+                    setPadding(0, this@MainActivity.dpToPx(5), 0, this@MainActivity.dpToPx(5))
                     setOnClickListener { controller.activateVariation(vi); refreshUi(); renderInfo(); renderGamePage() }
                 }
                 movesListContainer.addView(row)
