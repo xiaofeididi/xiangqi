@@ -142,7 +142,7 @@ object ConnectSession {
         publish(if (enabled) "自动走：开" else "自动走：关")
     }
 
-    fun setIntervalMs(value: Int) {
+    fun applyIntervalMs(value: Int) {
         intervalMs = value.coerceIn(400, 8000)
         appContext?.let { savePrefs(it) }
         publish("识别间隔 ${intervalMs}ms")
