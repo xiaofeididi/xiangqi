@@ -27,6 +27,7 @@ import android.widget.Toast
 import com.xqassist.capture.CaptureService
 import com.xqassist.connection.ConnectSession
 import com.xqassist.connection.LiveLinkService
+import com.xqassist.core.Notation
 import com.xqassist.core.Quad
 import com.xqassist.engine.EngineHolder
 import com.xqassist.engine.UcciEngine
@@ -692,16 +693,28 @@ class OverlayService : Service(), OverlayDisplay {
             delayMs = delayMsValue
             setStatus(message.ifBlank { sideLabel })
             val engReady = engine?.isReady == true
-            val engLine = if (engReady) {
+            val result = ConnectSession.lastResult
+            val engLine = if (!engReady) {
+                "启动中"
+            } else if (result.bestmove.isBlank()) {
+                if (message.contains("分析中")) "皮卡鱼思考中…" else "皮卡鱼 —"
+            } else {
                 val score = when {
-                    ConnectSession.lastResult.mateIn != null -> "杀${ConnectSession.lastResult.mateIn}"
-                    ConnectSession.lastResult.scoreCp != null -> "${ConnectSession.lastResult.scoreCp}分"
+                    result.mateIn != null -> "杀${result.mateIn}"
+                    result.scoreCp != null -> "${result.scoreCp}分"
                     else -> "-"
                 }
-                val mv = ConnectSession.lastResult.bestmove.ifBlank { "-" }
-                "皮卡鱼 $mv $score"
-            } else {
-                "启动中"
+                val board = ConnectSession.lastBoard
+                val cn = if (board != null) {
+                    try {
+                        Notation.moveToChinese(board, result.bestmove)
+                    } catch (_: Throwable) {
+                        result.bestmove
+                    }
+                } else {
+                    result.bestmove
+                }
+                "$cn  $score  深${result.depth}"
             }
             val detail = ConnectSession.lastRecognizedSummary
             infoText?.text = "引擎\n$engLine" + if (detail.isNotBlank()) "\n$detail" else "\n$sideLabel"

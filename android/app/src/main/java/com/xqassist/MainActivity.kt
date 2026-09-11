@@ -1285,11 +1285,18 @@ class MainActivity : AppCompatActivity() {
             2 -> {
                 val p0 = calibrationPoints[0]
                 val p1 = calibrationPoints[1]
+                val left = minOf(p0.first, p1.first)
+                val top = minOf(p0.second, p1.second)
+                val right = maxOf(p0.first, p1.first)
+                val bottom = maxOf(p0.second, p1.second)
+                // 用户点的是交叉点矩形；外扩一格变成外框（对齐 Pro /10 /11 采样）
+                val cellW = ((right - left) / 8).coerceAtLeast(1)
+                val cellH = ((bottom - top) / 9).coerceAtLeast(1)
                 capturedBoardRect = BoardRect(
-                    left = minOf(p0.first, p1.first),
-                    top = minOf(p0.second, p1.second),
-                    right = maxOf(p0.first, p1.first),
-                    bottom = maxOf(p0.second, p1.second),
+                    left = (left - cellW).coerceAtLeast(0),
+                    top = (top - cellH).coerceAtLeast(0),
+                    right = right + cellW,
+                    bottom = bottom + cellH,
                 )
                 capturedBoardFlipped = flipped
                 ConnectSession.setBoardRect(capturedBoardRect)

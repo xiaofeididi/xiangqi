@@ -14,11 +14,25 @@ interface ChessboardReader {
     fun readBoard(frame: Bitmap, board: BoardRect): Position
 }
 
-/** Grid math: 9 files x 10 ranks evenly across the board rect. */
+/**
+ * Grid math aligned with Pro FloatingWindowService:
+ * board rect is the OUTER wood/frame area (piece grid + 1 cell margin).
+ * Cell size = w/10 x h/11; first intersection is inset half a cell.
+ * Same formula as Pro's touchMove and our ConnectSession.proScreen.
+ */
 object GridGeometry {
     fun intersection(board: BoardRect, rank: Int, file: Int): Pair<Int, Int> {
-        val x = board.left + (board.right - board.left) * file / 8
-        val y = board.top + (board.bottom - board.top) * rank / 9
+        val w = (board.right - board.left).coerceAtLeast(1)
+        val h = (board.bottom - board.top).coerceAtLeast(1)
+        val cellW = (w / 10).coerceAtLeast(1)
+        val cellH = (h / 11).coerceAtLeast(1)
+        val cx = (board.left + board.right) / 2
+        val x = cx - ((4 - file) * cellW)
+        val y = if (rank <= 4) {
+            board.top + cellH + rank * cellH
+        } else {
+            board.bottom - cellH - ((9 - rank) * cellH)
+        }
         return x to y
     }
 }

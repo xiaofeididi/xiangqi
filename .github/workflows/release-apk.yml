@@ -54,12 +54,12 @@ jobs:
           tag_name: ${{ steps.version.outputs.version }}
           name: xq-assist ${{ steps.version.outputs.version }}
           body: |
-            xq-assist 自动构建的中国象棋助手 APK（v0.2.56）。
+            xq-assist 自动构建的中国象棋助手 APK（v0.2.57）。
 
             - 本地人机对练 / 棋谱浏览
             - 皮卡鱼最优着法提示
             - 悬浮窗自持连线分析（Activity 被杀仍可跑）
-            - 无校准时自动找盘；失败原因显示在悬浮窗
+            - 识别格点对齐 Pro 外框 /10 /11；非法局面提示原因
             - 可选自动走子（无障碍，Pro 坐标方案）
             - 云库开局查询
 

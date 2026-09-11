@@ -292,6 +292,23 @@ object ConnectSession {
             return
         }
 
+        val pieceCount = countPieces(board)
+        val hasWhiteKing = hasKing(board, "w")
+        val hasBlackKing = hasKing(board, "b")
+        // Pro 会在局面非法时提示「非有效局面」并跳过引擎
+        if (pieceCount < 4 || !hasWhiteKing || !hasBlackKing) {
+            lastRecognizedOk = false
+            lastRecognizedSummary = ""
+            val why = when {
+                pieceCount < 4 -> "子数过少($pieceCount)，格点可能没对准"
+                !hasWhiteKing && !hasBlackKing -> "未识别到双方将帅"
+                !hasWhiteKing -> "未识别到红帅"
+                else -> "未识别到黑将"
+            }
+            publish("非有效局面：$why", State.ERROR)
+            return
+        }
+
         val boardFen = boardFenWithSide(board)
         if (boardFen == lastAutoFen && System.currentTimeMillis() - lastAutoAt < AUTO_COOLDOWN_MS * 2) {
             publish("等待对方走子…", State.PAUSED)
@@ -300,12 +317,12 @@ object ConnectSession {
         if (boardFen != pendingFen) {
             pendingFen = boardFen
             pendingHits = 1
-            publish("识别中…（校验 $pendingHits/$STABLE_HITS）", State.RECOGNIZING)
+            publish("识别中…（校验 $pendingHits/$STABLE_HITS · ${pieceCount}子）", State.RECOGNIZING)
             return
         }
         pendingHits++
         if (pendingHits < STABLE_HITS) {
-            publish("识别中…（校验 $pendingHits/$STABLE_HITS）", State.RECOGNIZING)
+            publish("识别中…（校验 $pendingHits/$STABLE_HITS · ${pieceCount}子）", State.RECOGNIZING)
             return
         }
 
@@ -328,9 +345,21 @@ object ConnectSession {
             multiPv = 1,
             infinite = false,
             history = emptyList(),
+            onInfo = { partial ->
+                if (partial.bestmove.isNotBlank() && isRunning) {
+                    lastResult = partial
+                    publish(
+                        "已正常识别 · 皮卡鱼:${resultText(partial)}",
+                        State.ANALYZING,
+                        fen = boardFen,
+                        board = board,
+                        result = partial,
+                    )
+                }
+            },
         )
         if (result.bestmove.isBlank()) {
-            publish("已正常识别 · 引擎无着法", State.ERROR, fen = boardFen, board = board)
+            publish("已正常识别 · 引擎无着法（局面可能非法）", State.ERROR, fen = boardFen, board = board)
             return
         }
         lastResult = result
@@ -355,6 +384,20 @@ object ConnectSession {
         while (parts.size < 2) parts.add("w")
         parts[1] = sideToMove
         return parts.joinToString(" ")
+    }
+
+    private fun countPieces(board: Position): Int {
+        var n = 0
+        for (r in 0 until 10) for (f in 0 until 9) if (board.pieceAt(r, f) != null) n++
+        return n
+    }
+
+    private fun hasKing(board: Position, side: String): Boolean {
+        for (r in 0 until 10) for (f in 0 until 9) {
+            val p = board.pieceAt(r, f) ?: continue
+            if (p == side + "k") return true
+        }
+        return false
     }
 
     private fun resultText(result: EngineResult): String {
