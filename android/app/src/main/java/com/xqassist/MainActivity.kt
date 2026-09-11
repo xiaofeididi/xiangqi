@@ -1618,18 +1618,11 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         svc.updateActions(LiveLinkService.isConnected, analysisMode || ConnectSession.isRunning, controller.thinking || ConnectSession.isRunning)
         svc.updateConnect(
             autoOn = ConnectSession.autoMoveOn,
-            delayMs = ConnectSession.intervalMs,
+            delayMs = ConnectSession.tapGapMs,
             sideLabel = if (ConnectSession.sideToMove == "w") "红方" else "黑方",
             running = ConnectSession.isRunning,
             message = ConnectSession.lastMessage,
         )
-        val hint = controller.hintMove
-        val miniPos = ConnectSession.lastBoard ?: controller.displayPos
-        val miniStatus = if (ConnectSession.lastFen.isBlank()) "未识别" else {
-            val sc = if (lastResult.bestmove.isBlank()) "" else " · " + scoreTextFor(lastResult)
-            ConnectSession.lastMessage + sc
-        }
-        svc.updateMiniBoard(miniPos, hint, miniStatus)
         val cloudText = if (displayCloud) {
             if (cloudLoading) "查询中" else cloudMoves.firstOrNull()?.let { Notation.moveToChinese(controller.displayPos, it.move) + " " + it.winrate } ?: "无"
         } else "关"

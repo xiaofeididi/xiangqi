@@ -52,8 +52,13 @@ object ConnectSession {
     @Volatile
     var autoMoveOn: Boolean = false
 
+    /** 识盘间隔（非 Pro 点子间隔） */
     @Volatile
     var intervalMs: Int = 1200
+
+    /** 起点→终点点按间隔：Pro 默认 150ms；慢动画可调到 800ms */
+    @Volatile
+    var tapGapMs: Int = 150
 
     /** 识别结果里写入的行棋方（外部棋盘侧向无法可靠识别时由用户配置） */
     @Volatile
@@ -331,6 +336,8 @@ object ConnectSession {
             if (ok) {
                 lastAutoFen = boardFen
                 lastAutoAt = System.currentTimeMillis()
+                // Pro：走完再等 500ms 再进入下一轮识别
+                Thread.sleep(500)
                 publish("已走 ${result.bestmove}", State.AUTO_PLAYING, fen = boardFen, board = board, result = result)
             } else {
                 publish("自动走子失败（检查无障碍）", State.ERROR, fen = boardFen, board = board, result = result)
@@ -383,7 +390,7 @@ object ConnectSession {
         val ty = proScreenY(rect, toRank)
         val tappedFrom = LiveLinkService.tapAtSync(fx, fy)
         if (!tappedFrom) return false
-        Thread.sleep(150)
+        Thread.sleep(tapGapMs.coerceIn(80, 2000).toLong())
         return LiveLinkService.tapAtSync(tx, ty)
     }
 
