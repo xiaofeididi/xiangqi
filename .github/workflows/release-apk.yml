@@ -54,7 +54,7 @@ jobs:
           tag_name: ${{ steps.version.outputs.version }}
           name: xq-assist ${{ steps.version.outputs.version }}
           body: |
-            xq-assist 自动构建的中国象棋助手 APK（v0.2.49）。
+            xq-assist 自动构建的中国象棋助手 APK（v0.2.50）。
 
             - 本地人机对练 / 棋谱浏览
             - 皮卡鱼最优着法提示

@@ -381,7 +381,7 @@ class OverlayService : Service(), OverlayDisplay {
 
     override fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean) {
         linkButton?.apply {
-            text = if (linkOn) "断开" else "连线"
+            text = if (linkOn) "已连接" else "连线"
             background = roundBackground(if (linkOn) 0xFF2E7D32.toInt() else 0xFF39465A.toInt(), dp8().toFloat())
         }
         analyzeButton?.apply {

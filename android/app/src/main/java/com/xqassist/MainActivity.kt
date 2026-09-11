@@ -1532,16 +1532,19 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
     override fun onLink() {
         runOnUiThread {
-            bringToFront()
+            // 不要把用户从天天象棋拉回助手
             if (LiveLinkService.isConnected) {
                 LiveLinkService.disconnect()
-                statusMessage = "连线已断开"
                 toastOverlay("连线已断开")
-                renderInfo()
             } else {
-                linkDialog()
-                toastOverlay("请在弹窗中确认连线说明")
+                toastOverlay("请在系统设置开启无障碍「象棋助手」")
+                try {
+                    startActivity(android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                } catch (t: Throwable) {
+                    android.util.Log.w("Main", "open a11y failed", t)
+                }
             }
+            updateOverlayState()
         }
     }
 
@@ -1576,7 +1579,30 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         runOnUiThread {
             // 分析：不套用深度/时间；云库 + 皮卡鱼
             ConnectSession.useEngineLimits = false
-            toggleConnectOrAnalysis()
+            ConnectSession.provideEngine(engine)
+            ConnectSession.provideReader(if (visionMode == TemplatePieceReader.MODE_WIDE) wideReader else basicReader)
+            if (ConnectSession.isRunning) {
+                ConnectSession.stop()
+                analysisMode = false
+                toastOverlay("连线分析已停止")
+                updateOverlayState()
+                return@runOnUiThread
+            }
+            if (!CaptureService.isRunning) {
+                toastOverlay("屏幕识别未开，请回助手重新授权")
+                bringToFront()
+                return@runOnUiThread
+            }
+            if (ConnectSession.boardRect == null) {
+                toastOverlay("请先校准棋盘")
+                bringToFront()
+                return@runOnUiThread
+            }
+            if (!LiveLinkService.isConnected) {
+                toastOverlay("无障碍未开：仅分析，无法出子")
+            }
+            ConnectSession.start(engine, if (visionMode == TemplatePieceReader.MODE_WIDE) wideReader else basicReader)
+            updateOverlayState()
         }
     }
 
@@ -1587,8 +1613,8 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                 ConnectSession.provideEngine(engine)
                 ConnectSession.provideReader(if (visionMode == TemplatePieceReader.MODE_WIDE) wideReader else basicReader)
                 ConnectSession.playBestNow { ok ->
-                    statusMessage = if (ok) "已按分析结果出子" else "出子失败：请检查无障碍/着法"
-                    renderInfo()
+                    toastOverlay(if (ok) "已按分析结果出子" else "出子失败：请检查无障碍/着法")
+                    updateOverlayState()
                 }
             } else {
                 playBestNow()
@@ -1599,8 +1625,8 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     override fun onAutoMoveToggle() {
         runOnUiThread {
             ConnectSession.setAutoMove(!ConnectSession.autoMoveOn)
-            statusMessage = if (ConnectSession.autoMoveOn) "自动走已开启" else "自动走已关闭"
-            renderInfo()
+            toastOverlay(if (ConnectSession.autoMoveOn) "自动走已开启" else "自动走已关闭")
+            updateOverlayState()
         }
     }
 
@@ -1885,12 +1911,13 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     }
 
     override fun onDestroy() {
-        ConnectSession.onSnapshot = null
-        OverlayService.actions = null
-        ConnectSession.stop()
+        // 悬浮窗仍要工作：不要清空 actions / onSnapshot，也不要停 ConnectSession
+        ConnectSession.onSnapshot = { snap ->
+            runOnUiThread { onConnectSnapshot(snap) }
+        }
+        OverlayService.actions = this
         analysisMode = false
-        engine?.stop()
-        engine = null
+        // 皮卡鱼引擎保留，连线分析还要用
         super.onDestroy()
     }
 
