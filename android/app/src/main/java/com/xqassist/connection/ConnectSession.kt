@@ -73,22 +73,28 @@ object ConnectSession {
     var visionWide: Boolean = false
 
     @Volatile
-    private(set) var isRunning: Boolean = false
+    var isRunning: Boolean = false
+        private set
 
     @Volatile
-    private(set) var lastFen: String = ""
+    var lastFen: String = ""
+        private set
 
     @Volatile
-    private(set) var lastResult: EngineResult = EngineResult()
+    var lastResult: EngineResult = EngineResult()
+        private set
 
     @Volatile
-    private(set) var lastBoard: Position? = null
+    var lastBoard: Position? = null
+        private set
 
     @Volatile
-    private(set) var lastMessage: String = ""
+    var lastMessage: String = ""
+        private set
 
     @Volatile
-    private(set) var lastState: State = State.IDLE
+    var lastState: State = State.IDLE
+        private set
 
     var onSnapshot: ((Snapshot) -> Unit)? = null
 
