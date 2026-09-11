@@ -51,10 +51,9 @@ object ScreenHelper {
         }
     }
 
-    /** Pro: w2.x.startService — 记录屏幕尺寸并发起授权 */
+    /** Pro: w2.x.startService — 记录屏幕尺寸；授权 Intent 由 Activity 发起 */
     fun prepare(activity: Activity): Boolean {
         return try {
-            val mpm = activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             val wm = activity.getSystemService(Context.WINDOW_SERVICE) as WindowManager
             val point = Point()
             @Suppress("DEPRECATION")
@@ -63,12 +62,16 @@ object ScreenHelper {
             height = point.y.coerceAtLeast(1)
             dpi = activity.resources.displayMetrics.densityDpi.takeIf { it > 0 } ?: 320
             Log.i(TAG, "prepare ${width}x${height}@$dpi")
-            activity.startActivityForResult(mpm.createScreenCaptureIntent(), REQUEST_CODE)
             true
         } catch (t: Throwable) {
             Log.e(TAG, "prepare failed", t)
             false
         }
+    }
+
+    fun createScreenCaptureIntent(activity: Activity): Intent? {
+        val mpm = activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager?
+        return mpm?.createScreenCaptureIntent()
     }
 
     const val REQUEST_CODE = 10086
