@@ -11,8 +11,8 @@ android {
         applicationId = "com.xqassist"
         minSdk = 26
         targetSdk = 34
-        versionCode = 42
-        versionName = "0.2.42"
+        versionCode = 43
+        versionName = "0.2.43"
         // engine binary is arm64 only
         ndk { abiFilters.add("arm64-v8a") }
     }

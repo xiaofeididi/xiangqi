@@ -53,6 +53,8 @@ class CaptureService : Service() {
         private var lastCode: Int = -1
         @Volatile
         private var lastData: Intent? = null
+        @Volatile
+        private var pendingProjection: MediaProjection? = null
 
         @Volatile
         var isRunning = false
@@ -74,7 +76,17 @@ class CaptureService : Service() {
         fun stop(context: Context) {
             lastCode = -1
             lastData = null
+            pendingProjection = null
             context.stopService(Intent(context, CaptureService::class.java))
+        }
+
+        /**
+         * 在 Activity 授权回调里立刻 getMediaProjection，再交给本服务挂 VirtualDisplay。
+         * 避免把 token Intent 再经 startForegroundService 丢一次导致授权丢失。
+         */
+        fun startWithProjection(context: Context, projection: MediaProjection) {
+            pendingProjection = projection
+            context.startForegroundService(Intent(context, CaptureService::class.java))
         }
 
         fun start(context: Context, resultCode: Int, data: Intent) {
@@ -118,31 +130,45 @@ class CaptureService : Service() {
             return START_NOT_STICKY
         }
 
-        var resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, -1) ?: -1
-        var data: Intent? = if (Build.VERSION.SDK_INT >= 33) {
-            intent?.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            intent?.getParcelableExtra(EXTRA_RESULT_DATA)
-        }
-        if (data == null) {
-            resultCode = lastCode
-            data = lastData
+        // 优先使用 Activity 刚建好的 projection
+        var mp = pendingProjection
+        pendingProjection = null
+
+        if (mp == null) {
+            var resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, -1) ?: -1
+            var data: Intent? = if (Build.VERSION.SDK_INT >= 33) {
+                intent?.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent?.getParcelableExtra(EXTRA_RESULT_DATA)
+            }
+            if (data == null) {
+                resultCode = lastCode
+                data = lastData
+            }
+            if (data == null || resultCode < 0) {
+                Log.w(TAG, "capture: no projection token, stop quietly")
+                isRunning = false
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            mp = try {
+                mpm.getMediaProjection(resultCode, data)
+            } catch (t: Throwable) {
+                Log.e(TAG, "capture: getMediaProjection failed", t)
+                null
+            }
         }
 
-        if (data == null || resultCode < 0) {
-            // 系统无授权数据重启：静默退出，避免“无限要权限”
-            Log.w(TAG, "capture: restart without projection token, stop quietly")
+        if (mp == null) {
             isRunning = false
             stopSelf()
             return START_NOT_STICKY
         }
 
         return try {
-            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            projection = mpm.getMediaProjection(resultCode, data)
-                ?: throw IllegalStateException("getMediaProjection null")
-
+            projection = mp
             val callbackHandler = Handler(mainLooper)
             projectionCallback = object : MediaProjection.Callback() {
                 override fun onStop() {

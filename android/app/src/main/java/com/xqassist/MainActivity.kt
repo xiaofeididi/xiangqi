@@ -40,6 +40,7 @@ import com.xqassist.ui.BoardView
 import com.xqassist.vision.BoardRect
 import com.xqassist.vision.TemplatePieceReader
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -118,21 +119,47 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     private val mediaProjectionManager by lazy {
         getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
     }
+    /** 刚授权成功的时间戳，避免服务异步启动期间被判定“未授权”而无限重弹 */
+    @Volatile
+    private var captureGrantedAt = 0L
+    private var pendingOpenOverlayAfterCapture = false
+
     private val capturePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            CaptureService.start(this, result.resultCode, result.data!!)
-            setStatusMessage("屏幕识别已授权")
-            Toast.makeText(this, "屏幕识别已打开", Toast.LENGTH_SHORT).show()
-            // 授权完成后自动继续开悬浮窗
-            if (hasOverlayPermission() && hasAccessibilityPermission() && !overlayOn) {
-                ensurePermissionsThenOverlay()
+            try {
+                val projection = mediaProjectionManager.getMediaProjection(
+                    result.resultCode,
+                    result.data!!,
+                )
+                if (projection == null) {
+                    Toast.makeText(this, "截屏授权无效，请再试一次", Toast.LENGTH_LONG).show()
+                    return@registerForActivityResult
+                }
+                CaptureService.startWithProjection(this, projection)
+                captureGrantedAt = System.currentTimeMillis()
+                Toast.makeText(this, "屏幕识别已打开", Toast.LENGTH_SHORT).show()
+                // 稍等服务就绪后再开悬浮，避免立刻再查 isRunning 导致死循环
+                if (pendingOpenOverlayAfterCapture) {
+                    pendingOpenOverlayAfterCapture = false
+                    lifecycleScope.launch {
+                        delay(800)
+                        if (hasOverlayPermission() && hasAccessibilityPermission()) {
+                            OverlayService.start(this@MainActivity)
+                            overlayOn = true
+                            Toast.makeText(this@MainActivity, "悬浮窗已开启", Toast.LENGTH_SHORT).show()
+                            updateOverlayState()
+                        }
+                    }
+                }
+            } catch (t: Throwable) {
+                android.util.Log.e("Capture", "getMediaProjection failed", t)
+                Toast.makeText(this, "截屏启动失败：${t.message}", Toast.LENGTH_LONG).show()
             }
         } else {
-            setStatusMessage("屏幕识别未授权")
-            Toast.makeText(this, "截屏被拒绝，请重试并允许", Toast.LENGTH_LONG).show()
-            renderInfo()
+            pendingOpenOverlayAfterCapture = false
+            Toast.makeText(this, "截屏被拒绝", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -237,11 +264,10 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             setOnClickListener { action() }
         }
         statusStrip = TextView(this).apply {
-            text = statusMessage
+            text = ""
+            visibility = View.GONE
             textSize = 11f
             setTextColor(muted)
-            maxLines = 2
-            setPadding(dp(2), dp(3), dp(2), 0)
         }
         val row1 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -278,7 +304,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         row2.addView(tool("换招") { forceChangeMove() })
         toolbar.addView(row1)
         toolbar.addView(row2)
-        toolbar.addView(statusStrip)
+        // 状态条去掉，避免和底部重复显示“屏幕识别未授权”
 
         navBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -432,35 +458,12 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     }
 
     private fun buildEnginePage(toPx: (Int) -> Int) {
-        val controls = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        controls.addView(check("显示云库", displayCloud) { _, value -> displayCloud = value; if (value) queryCloud() })
-        controls.addView(check("执行云库", executeCloud) { _, value -> executeCloud = value })
-        enginePage.addView(controls)
-
-        val switches = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        switches.addView(check("后台思考", backgroundThink) { _, value -> backgroundThink = value })
-        switches.addView(check("音效", playSound) { _, value -> playSound = value })
-        switches.addView(check("箭头", showArrowHint) { _, value ->
-            showArrowHint = value
-            board.showArrow = value
-            refreshUi()
-        })
-        enginePage.addView(switches)
+        // 开关统一放在设置页，首页只保留引擎分析结果
+        enginePage.removeAllViews()
     }
 
     private fun buildOpeningPage(toPx: (Int) -> Int) {
         openingPage.removeAllViews()
-        val controls = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, toPx(2), 0, toPx(2))
-        }
-        controls.addView(check("显示云库", displayCloud) { _, value -> displayCloud = value; if (value) queryCloud() })
-        controls.addView(check("执行云库", executeCloud) { _, value -> executeCloud = value })
-        openingPage.addView(controls)
     }
 
     private fun buildSettingsPage(toPx: (Int) -> Int) {
@@ -516,8 +519,8 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, toPx(5), 0, toPx(5))
         }
-        toggles.addView(check("后台思考", backgroundThink) { _, value -> backgroundThink = value })
-        toggles.addView(check("音效", playSound) { _, value -> playSound = value })
+        toggles.addView(check("显示云库", displayCloud) { _, value -> displayCloud = value; if (value) queryCloud() })
+        toggles.addView(check("执行云库", executeCloud) { _, value -> executeCloud = value })
         toggles.addView(check("箭头", showArrowHint) { _, value ->
             showArrowHint = value
             refreshUi()
@@ -876,7 +879,10 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     }
 
     private fun renderInfo() {
-        if (::statusStrip.isInitialized) statusStrip.text = statusMessage
+        if (::statusStrip.isInitialized) {
+            // 顶部状态条已隐藏，避免与底部重复
+            statusStrip.visibility = View.GONE
+        }
         updateToolStates()
         updateOverlayState()
         if (bottomTab == TAB_ENGINE) renderEnginePage()
@@ -1052,26 +1058,17 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     }
 
     private fun menuDialog() {
+        // 只保留工具栏上没有的入口，避免和顶栏重复
         val options = arrayOf(
-            "新局", "打开局面", "保存局面", "编辑局面", "翻转局面",
-            "引擎执黑", "引擎红黑", "分析模式", "立即出招", "强制变招",
-            "连线", "悬浮窗", "设置",
+            "打开局面", "保存局面", "翻转局面", "连线", "设置",
         )
         AlertDialog.Builder(this).setTitle("菜单").setItems(options) { _, which ->
             when (which) {
-                0 -> newGame()
-                1 -> importFenDialog()
-                2 -> exportFenDialog()
-                3 -> editDialog()
-                4 -> { flipped = !flipped; refreshUi() }
-                5 -> setEngineSide("b")
-                6 -> setEngineSide("w")
-                7 -> toggleAnalysisMode()
-                8 -> playBestNow()
-                9 -> forceChangeMove()
-                10 -> linkDialog()
-                11 -> toggleOverlay()
-                12 -> settingsDialog()
+                0 -> importFenDialog()
+                1 -> exportFenDialog()
+                2 -> { flipped = !flipped; refreshUi() }
+                3 -> linkDialog()
+                4 -> settingsDialog()
             }
         }.show()
     }
@@ -1683,8 +1680,11 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     private fun hasAccessibilityPermission(): Boolean =
         LiveLinkService.isConnected
 
-    private fun hasCapturePermission(): Boolean =
-        CaptureService.isRunning && CaptureService.latestBitmap() != null
+    private fun hasCapturePermission(): Boolean {
+        if (CaptureService.isRunning) return true
+        // 刚授权、服务仍在启动中
+        return captureGrantedAt > 0L && System.currentTimeMillis() - captureGrantedAt < 8000L
+    }
 
     private fun permissionChecklist(): String = buildString {
         append(if (hasOverlayPermission()) "✔" else "✘")
@@ -1742,8 +1742,10 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                     )
                     else -> {
                         try {
+                            pendingOpenOverlayAfterCapture = true
                             capturePermissionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
                         } catch (e: Throwable) {
+                            pendingOpenOverlayAfterCapture = false
                             Toast.makeText(this, "截屏授权失败：${e.message}", Toast.LENGTH_LONG).show()
                         }
                     }
