@@ -131,11 +131,6 @@ class CaptureService : Service() {
 
             val callbackHandler = Handler(mainLooper)
             projectionCallback = object : MediaProjection.Callback() {
-                override fun onStart() {
-                    Log.i(TAG, "capture: projection onStart（系统应显示屏幕已共享）")
-                    isRunning = true
-                }
-
                 override fun onStop() {
                     Log.i(TAG, "capture: projection onStop")
                     isRunning = false
