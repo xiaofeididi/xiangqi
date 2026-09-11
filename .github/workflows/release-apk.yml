@@ -54,13 +54,15 @@ jobs:
           tag_name: ${{ steps.version.outputs.version }}
           name: xq-assist ${{ steps.version.outputs.version }}
           body: |
-            自动构建的中国象棋助手 APK。
+            xq-assist 自动构建的中国象棋助手 APK（v0.2.36）。
 
-            - 本地人机对练
-            - 皮卡鱼最优着法连线提示
+            - 本地人机对练 / 棋谱浏览
+            - 皮卡鱼最优着法提示
+            - 悬浮窗 + 屏幕识别连线分析
+            - 可选自动走子（无障碍，Pro 坐标方案）
             - 云库开局查询
 
-            下载说明：请先登录 GitHub 再下载。完整 APK 大小约 57 MB；下载不完整会得到错误页，安装器可能提示 package is null。SHA-256：${{ steps.sha256.outputs.apk_sha256 }}。
+            下载说明：请先登录 GitHub 再下载。完整 APK 约 57MB；下载不完整会得到错误页，安装器可能提示 package is null。SHA-256：${{ steps.sha256.outputs.apk_sha256 }}。
           files: android/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Create snapshot Release
