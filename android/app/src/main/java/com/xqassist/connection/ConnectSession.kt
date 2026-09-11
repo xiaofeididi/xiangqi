@@ -105,6 +105,13 @@ object ConnectSession {
     private var pendingHits = 0
     private var lastAutoFen = ""
     private var lastAutoAt = 0L
+    private var emptyBoardTicks = 0
+
+    fun clearBoardRect() {
+        boardRect = null
+        appContext?.let { savePrefs(it) }
+        publish("棋盘范围已清空，将重新自动找盘")
+    }
 
     private const val PREFS = "connect_session"
     private const val KEY_LEFT = "rect_left"
@@ -304,15 +311,29 @@ object ConnectSession {
         if (pieceCount < 4 || !hasWhiteKing || !hasBlackKing) {
             lastRecognizedOk = false
             lastRecognizedSummary = ""
+            // 连续空盘说明矩形偏了，自动清掉重找
+            if (pieceCount < 2) {
+                emptyBoardTicks++
+                if (emptyBoardTicks >= 3 && boardRect != null) {
+                    emptyBoardTicks = 0
+                    boardRect = null
+                    appContext?.let { savePrefs(it) }
+                    publish("连续未识别到棋子，已清空棋盘范围并重新找盘", State.ERROR)
+                    return
+                }
+            } else {
+                emptyBoardTicks = 0
+            }
             val why = when {
-                pieceCount < 4 -> "子数过少($pieceCount)，格点可能没对准"
-                !hasWhiteKing && !hasBlackKing -> "未识别到双方将帅"
-                !hasWhiteKing -> "未识别到红帅"
-                else -> "未识别到黑将"
+                pieceCount < 4 -> "子数过少($pieceCount)·请清校准重找盘或回助手重新标定"
+                !hasWhiteKing && !hasBlackKing -> "未识别到双方将帅($pieceCount子)"
+                !hasWhiteKing -> "未识别到红帅($pieceCount子)"
+                else -> "未识别到黑将($pieceCount子)"
             }
             publish("非有效局面：$why", State.ERROR)
             return
         }
+        emptyBoardTicks = 0
 
         // Pro m.j/m.m：红帅在上半区说明屏幕是黑方视角，整盘旋转 180°
         val oriented = orientBoard(board)

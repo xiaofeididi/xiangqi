@@ -6,8 +6,10 @@ import kotlin.math.abs
 import kotlin.math.sqrt
 
 /**
- * 自动检测棋盘外框（对齐 Pro：先拿到棋子分布，再推出外框）。
- * Pro 用 YOLO class14 找盘 + 外扩 1 格；我们用红/黑色块聚类代替 YOLO。
+ * 自动检测棋盘外框。
+ * Pro：YOLO 棋子中心包围盒外扩 1 格。
+ * 我们：在木盘区域内找「非木色」棋子像素聚类，再同样外扩。
+ * 注意：黑子字色可能是深灰而非纯黑，不能用 lum<60 卡死。
  */
 object BoardAutoDetector {
 
@@ -19,11 +21,20 @@ object BoardAutoDetector {
         if (w < 50 || h < 50) return null
 
         val step = maxOf(2, minOf(w, h) / 280)
-        val blobs = findPieceBlobs(frame, step)
-        if (blobs.size < 8) {
-            // 棋子太少时退回木色外框
-            return detectByWood(frame, step)
-        }
+        val wood = detectByWood(frame, step)
+        // 先限制在木盘附近，避免把 UI 红色按钮当成棋子
+        val search = wood ?: BoardRect(0, 0, w - 1, h - 1)
+        val padX = ((search.right - search.left) / 12).coerceAtLeast(8)
+        val padY = ((search.bottom - search.top) / 12).coerceAtLeast(8)
+        val region = BoardRect(
+            left = (search.left - padX).coerceAtLeast(0),
+            top = (search.top - padY).coerceAtLeast(0),
+            right = (search.right + padX).coerceAtMost(w - 1),
+            bottom = (search.bottom + padY).coerceAtMost(h - 1),
+        )
+
+        val blobs = findPieceBlobs(frame, step, region)
+        if (blobs.size < 6) return wood
 
         var minX = Int.MAX_VALUE
         var minY = Int.MAX_VALUE
@@ -35,40 +46,35 @@ object BoardAutoDetector {
             if (b.cx > maxX) maxX = b.cx
             if (b.cy > maxY) maxY = b.cy
         }
-
         val cell = estimateCell(blobs) ?: ((maxX - minX).coerceAtLeast(1) / 8f)
-        // 棋子中心包围盒 ≈ 首末交叉点；外扩 1 格得到外框（Pro 同款）
-        val rect = BoardRect(
+        val byPieces = BoardRect(
             left = (minX - cell).toInt().coerceAtLeast(0),
             top = (minY - cell).toInt().coerceAtLeast(0),
             right = (maxX + cell).toInt().coerceAtMost(w - 1),
             bottom = (maxY + cell).toInt().coerceAtMost(h - 1),
         )
-        if (rect.right - rect.left < 80 || rect.bottom - rect.top < 80) {
-            return detectByWood(frame, step)
+        if (byPieces.right - byPieces.left < 80 || byPieces.bottom - byPieces.top < 80) {
+            return wood
         }
-        return rect
+        return byPieces
     }
 
-    /** 红/黑棋子像素聚类 */
-    private fun findPieceBlobs(frame: Bitmap, step: Int): List<PieceBlob> {
-        val w = frame.width
-        val h = frame.height
+    private fun findPieceBlobs(frame: Bitmap, step: Int, region: BoardRect): List<PieceBlob> {
         val pts = ArrayList<IntArray>(400)
-        var y = 0
-        while (y < h) {
-            var x = 0
-            while (x < w) {
-                val kind = pieceKind(frame.getPixel(x, y))
-                if (kind >= 0) pts.add(intArrayOf(x, y, kind))
+        var y = region.top
+        while (y <= region.bottom) {
+            var x = region.left
+            while (x <= region.right) {
+                if (isPiecePixel(frame.getPixel(x, y))) {
+                    pts.add(intArrayOf(x, y))
+                }
                 x += step
             }
             y += step
         }
         if (pts.size < 20) return emptyList()
 
-        // 简单网格哈希聚类：邻近同色点归为一簇
-        val cell = maxOf(step * 2, minOf(w, h) / 40)
+        val cell = maxOf(step * 2, minOf(region.right - region.left, region.bottom - region.top) / 40)
         val buckets = HashMap<Long, ArrayList<IntArray>>()
         fun key(x: Int, y: Int): Long = ((x / cell).toLong() shl 32) or (y / cell).toLong()
         for (p in pts) {
@@ -76,11 +82,11 @@ object BoardAutoDetector {
         }
         val used = HashSet<Long>()
         val blobs = ArrayList<PieceBlob>()
-        for ((k, list) in buckets) {
-            if (k in used) continue
+        for (k0 in buckets.keys.toList()) {
+            if (k0 in used) continue
             val queue = ArrayDeque<Long>()
-            queue.add(k)
-            used.add(k)
+            queue.add(k0)
+            used.add(k0)
             var sx = 0L
             var sy = 0L
             var n = 0
@@ -101,14 +107,11 @@ object BoardAutoDetector {
                     }
                 }
             }
-            if (n >= 4) {
-                blobs.add(PieceBlob((sx / n).toInt(), (sy / n).toInt(), n))
-            }
+            if (n >= 3) blobs.add(PieceBlob((sx / n).toInt(), (sy / n).toInt(), n))
         }
         return blobs
     }
 
-    /** 相邻棋子中心距的中位数 ≈ 格距 */
     private fun estimateCell(blobs: List<PieceBlob>): Float? {
         if (blobs.size < 4) return null
         val dists = ArrayList<Float>(blobs.size * 4)
@@ -119,7 +122,7 @@ object BoardAutoDetector {
                 val dx = (blobs[i].cx - blobs[j].cx).toFloat()
                 val dy = (blobs[i].cy - blobs[j].cy).toFloat()
                 val d = sqrt(dx * dx + dy * dy)
-                if (d in 8f..400f && d < best) best = d
+                if (d in 10f..400f && d < best) best = d
             }
             if (best < Float.MAX_VALUE) dists.add(best)
         }
@@ -160,15 +163,25 @@ object BoardAutoDetector {
         return rect
     }
 
-    /** Pro w2.j.c：1=红 0=黑 -1=其它 */
-    private fun pieceKind(pixel: Int): Int {
+    /**
+     * 棋子像素：红字 / 深灰字，且不是暖色木纹。
+     * 黑子字色常见 RGB≈120–180 灰，不能按 Pro 的 lum<60 卡。
+     */
+    fun isPiecePixel(pixel: Int): Boolean {
         val r = Color.red(pixel)
         val g = Color.green(pixel)
         val b = Color.blue(pixel)
-        if (r > 120 && r > g * 1.5f && r > b * 1.5f && r - g > 60 && r - b > 60) return 1
-        val lum = (r * 299 + g * 587 + b * 114) / 1000f
-        if (lum < 60f && abs(r - g) < 30 && abs(r - b) < 30) return 0
-        return -1
+        val maxC = maxOf(r, g, b)
+        val minC = minOf(r, g, b)
+        // 木盘/背景：偏暖且亮
+        if (r > g && g >= b - 10 && r > 170 && r - b > 35) return false
+        // 红字：红明显高于绿蓝
+        if (r >= g + 35 && r >= b + 35 && r > 90 && r - minC > 40) return true
+        // 黑/灰字：低饱和、比木暗
+        if (maxC - minC < 45 && maxC in 40..195) return true
+        // 很暗也算
+        if (maxC < 70) return true
+        return false
     }
 
     private fun isBoardColor(pixel: Int): Boolean {

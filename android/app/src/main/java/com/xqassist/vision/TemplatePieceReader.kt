@@ -9,9 +9,10 @@ import kotlin.math.abs
 import kotlin.math.sqrt
 
 /**
- * 格点识子：先用 Pro 的红/黑像素规则判断「有没有子、什么颜色」，
- * 再在对应颜色的模板里做缩放相关匹配。
- * 采样半径随格距自适应，避免大分辨率下只打到木纹。
+ * 格点识子。
+ * Pro：YOLO 直接给 classId。
+ * 我们：在交叉点附近与全部模板做相关匹配取最高分。
+ * 不做严格红/黑预过滤——黑子字色常是灰（RGB≈130），Pro 的 lum<60 会全漏。
  */
 class TemplatePieceReader(
     context: Context,
@@ -19,13 +20,14 @@ class TemplatePieceReader(
 ) : ChessboardReader {
 
     private val templates: Map<String, Bitmap> = loadTemplates(context)
-    private val matchThreshold = if (mode == MODE_WIDE) 0.42 else 0.48
+    private val matchThreshold = if (mode == MODE_WIDE) 0.38 else 0.42
 
     override fun readBoard(frame: Bitmap, board: BoardRect): Position {
         val cells = MutableList(10) { arrayOfNulls<String>(9) }
         val cellW = ((board.right - board.left) / 10).coerceAtLeast(8)
         val cellH = ((board.bottom - board.top) / 11).coerceAtLeast(8)
-        val radius = ((cellW + cellH) / 6).coerceIn(6, 28)
+        // 采样半径 ≈ 半颗子，覆盖字心与盘沿
+        val radius = ((minOf(cellW, cellH)) * 0.42f).toInt().coerceIn(7, 30)
         for (rank in 0 until 10) {
             for (file in 0 until 9) {
                 val (x, y) = GridGeometry.intersection(board, rank, file)
@@ -47,13 +49,12 @@ class TemplatePieceReader(
     }
 
     private fun matchAt(frame: Bitmap, px: Int, py: Int, radius: Int): String? {
-        val kind = samplePieceKind(frame, px, py, radius)
-        if (kind == 0) return null
-        val colorPrefix = if (kind == 1) "w" else "b"
+        // 木色空点：中心明显是暖木则直接空
+        if (looksLikeWood(frame, px, py, radius / 2)) return null
+
         var best: String? = null
         var bestScore = -1.0
         for ((code, tmpl) in templates) {
-            if (!code.startsWith(colorPrefix)) continue
             val score = correlate(frame, px, py, tmpl, radius)
             if (score > bestScore) {
                 bestScore = score
@@ -63,58 +64,52 @@ class TemplatePieceReader(
         return if (bestScore >= matchThreshold) best else null
     }
 
-    /** Pro w2.j.c 环采样：多数红 → 1，多数黑 → 0，否则无子 */
-    private fun samplePieceKind(frame: Bitmap, px: Int, py: Int, radius: Int): Int {
-        var red = 0
-        var black = 0
-        val r1 = (radius * 0.55f).toInt().coerceAtLeast(3)
-        val r2 = (radius * 0.95f).toInt().coerceAtLeast(r1 + 2)
-        for (r in r1..r2 step maxOf(1, (r2 - r1) / 3)) {
-            for (a in 0 until 16) {
-                val ang = a * Math.PI / 8.0
-                val x = px + (r * kotlin.math.cos(ang)).toInt()
-                val y = py + (r * kotlin.math.sin(ang)).toInt()
+    private fun looksLikeWood(frame: Bitmap, px: Int, py: Int, radius: Int): Boolean {
+        var wood = 0
+        var n = 0
+        val r = radius.coerceAtLeast(3)
+        for (dy in -r..r step 2) {
+            for (dx in -r..r step 2) {
+                val x = px + dx
+                val y = py + dy
                 if (x !in 0 until frame.width || y !in 0 until frame.height) continue
-                when (pieceKind(frame.getPixel(x, y))) {
-                    1 -> red++
-                    0 -> black++
-                }
+                val c = frame.getPixel(x, y)
+                val rr = Color.red(c)
+                val gg = Color.green(c)
+                val bb = Color.blue(c)
+                if (rr > 150 && rr > gg && gg >= bb - 5 && rr - bb > 25) wood++
+                n++
             }
         }
-        val total = red + black
-        if (total < 4) return 0
-        return if (red > black) 1 else 0
+        return n > 0 && wood * 100 / n >= 78
     }
 
-    private fun pieceKind(pixel: Int): Int {
-        val r = Color.red(pixel)
-        val g = Color.green(pixel)
-        val b = Color.blue(pixel)
-        if (r > 120 && r > g * 1.5f && r > b * 1.5f && r - g > 60 && r - b > 60) return 1
-        val lum = (r * 299 + g * 587 + b * 114) / 1000f
-        if (lum < 60f && abs(r - g) < 30 && abs(r - b) < 30) return 0
-        return -1
-    }
-
+    /**
+     * 将画面中以 (px,py) 为中心、半径 radius 的区域，
+     * 与 150×150 模板的中心同尺度区域做平均色相似度。
+     */
     private fun correlate(frame: Bitmap, px: Int, py: Int, tmpl: Bitmap, radius: Int): Double {
         var sum = 0.0
         var n = 0
-        val step = if (radius >= 14) 2 else 1
+        val step = if (radius >= 16) 2 else 1
+        val scale = tmpl.width / 2f / radius // 模板像素 / 画面像素
         for (dy in -radius..radius step step) {
             for (dx in -radius..radius step step) {
                 val fx = px + dx
                 val fy = py + dy
                 if (fx !in 0 until frame.width || fy !in 0 until frame.height) continue
-                val tx = tmpl.width / 2 + dx * tmpl.width / (radius * 2 + 1)
-                val ty = tmpl.height / 2 + dy * tmpl.height / (radius * 2 + 1)
+                val tx = (tmpl.width / 2 + dx * scale).toInt()
+                val ty = (tmpl.height / 2 + dy * scale).toInt()
                 if (tx !in 0 until tmpl.width || ty !in 0 until tmpl.height) continue
                 val fc = frame.getPixel(fx, fy)
                 val tc = tmpl.getPixel(tx, ty)
+                // 忽略模板透明像素
+                if (Color.alpha(tc) < 32) continue
                 sum += colorSimilarity(fc, tc)
                 n++
             }
         }
-        return if (n == 0) -1.0 else sum / n
+        return if (n < 12) -1.0 else sum / n
     }
 
     private fun colorSimilarity(a: Int, b: Int): Double {
