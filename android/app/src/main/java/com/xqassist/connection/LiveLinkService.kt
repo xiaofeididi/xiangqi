@@ -31,6 +31,23 @@ class LiveLinkService : AccessibilityService() {
             }, null)
         }
 
+        /** 同步点击，供连线分析循环在后台线程调用；默认最多等 1.5s */
+        fun tapAtSync(x: Int, y: Int, timeoutMs: Long = 1500L): Boolean {
+            if (instance == null) return false
+            val latch = java.util.concurrent.CountDownLatch(1)
+            val ok = java.util.concurrent.atomic.AtomicBoolean(false)
+            val dispatched = tapAt(x, y) { success ->
+                ok.set(success)
+                latch.countDown()
+            }
+            if (!dispatched) return false
+            return try {
+                latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS) && ok.get()
+            } catch (_: InterruptedException) {
+                false
+            }
+        }
+
         fun disconnect() {
             instance?.disableSelf()
         }

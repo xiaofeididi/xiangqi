@@ -17,12 +17,16 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.xqassist.core.Quad
+import com.xqassist.ui.MiniBoardView
 
 interface OverlayDisplay {
     fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean = false)
     fun updateControls(depth: Int, seconds: Int)
     fun updateInfo(cloud: String, engineSummary: String, engineDetail: String)
     fun updateOpacity(alpha: Float)
+    fun updateConnect(autoOn: Boolean, delayMs: Int, sideLabel: String, running: Boolean, message: String)
+    fun updateMiniBoard(position: com.xqassist.core.Position?, hint: Quad?, status: String)
 }
 
 class OverlayService : Service(), OverlayDisplay {
@@ -36,6 +40,10 @@ class OverlayService : Service(), OverlayDisplay {
         fun onTimeChange(delta: Int)
         fun onOpacityChange(delta: Int)
         fun onCloseOverlay()
+        fun onAutoMoveToggle()
+        fun onDelayChange(delta: Int)
+        fun onSideToggle()
+        fun onCalibrate()
     }
 
     companion object {
@@ -64,6 +72,12 @@ class OverlayService : Service(), OverlayDisplay {
     private var analyzeButton: Button? = null
     private var playButton: Button? = null
     private var recognizeButton: Button? = null
+    private var autoButton: Button? = null
+    private var calibrateButton: Button? = null
+    private var sideButton: Button? = null
+    private var delayText: TextView? = null
+    private var miniBoard: MiniBoardView? = null
+    private var connectStatus: TextView? = null
     private var expanded = true
     private var opacity = 1f
     private var startX = 0
@@ -124,7 +138,17 @@ class OverlayService : Service(), OverlayDisplay {
         buttons.addView(analyzeButton)
         buttons.addView(playButton)
         card.addView(buttons)
-        card.addView(spacer(dp(5)))
+        card.addView(spacer(dp(3)))
+
+        val connectRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        autoButton = actionButton("自动走")
+        calibrateButton = actionButton("校准")
+        sideButton = actionButton("红方")
+        connectRow.addView(autoButton)
+        connectRow.addView(calibrateButton)
+        connectRow.addView(sideButton)
+        card.addView(connectRow)
+        card.addView(spacer(dp(3)))
 
         val controls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -133,9 +157,23 @@ class OverlayService : Service(), OverlayDisplay {
         }
         controls.addView(controlTile("深", "不限", 1.0f) { delta -> actions?.onDepthChange(delta) })
         controls.addView(controlTile("时", "3秒", 1.0f) { delta -> actions?.onTimeChange(delta) })
+        controls.addView(controlTile("延", "1.2s", 1.0f) { delta -> actions?.onDelayChange(delta) })
         controls.addView(controlTile("透明", "100%", 1.2f) { delta -> actions?.onOpacityChange(delta) })
         card.addView(controls)
-        card.addView(spacer(dp(5)))
+        card.addView(spacer(dp(4)))
+
+        miniBoard = MiniBoardView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(148))
+        }
+        card.addView(miniBoard!!)
+        connectStatus = TextView(this).apply {
+            text = "连线分析：待机"
+            textSize = 11f
+            setTextColor(0xFF80CBC4.toInt())
+            setPadding(0, dp(2), 0, dp(2))
+        }
+        card.addView(connectStatus!!)
+        card.addView(spacer(dp(3)))
 
         infoText = TextView(this).apply {
             text = "云库：-\n引擎：-\n-"
@@ -174,6 +212,9 @@ class OverlayService : Service(), OverlayDisplay {
         recognizeButton?.setOnClickListener { actions?.onRecognize() }
         analyzeButton?.setOnClickListener { actions?.onAnalyze() }
         playButton?.setOnClickListener { actions?.onPlayMove() }
+        autoButton?.setOnClickListener { actions?.onAutoMoveToggle() }
+        calibrateButton?.setOnClickListener { actions?.onCalibrate() }
+        sideButton?.setOnClickListener { actions?.onSideToggle() }
 
         val miniView = TextView(this).apply {
             text = "≡ 象棋"
@@ -310,6 +351,7 @@ class OverlayService : Service(), OverlayDisplay {
         when (label) {
             "深" -> depthText = value
             "时" -> timeText = value
+            "延" -> delayText = value
             "透明" -> opacityText = value
         }
         row.addView(miniButton("-") { onDelta(-1) })
@@ -396,6 +438,28 @@ class OverlayService : Service(), OverlayDisplay {
         opacityText?.text = (opacity * 100).toInt().toString() + "%"
     }
 
+    override fun updateConnect(autoOn: Boolean, delayMs: Int, sideLabel: String, running: Boolean, message: String) {
+        autoButton?.apply {
+            text = if (autoOn) "自动·开" else "自动走"
+            background = roundBackground(if (autoOn) 0xFF6A1B9A.toInt() else 0xFF39465A.toInt(), dp8().toFloat())
+        }
+        sideButton?.text = sideLabel
+        delayText?.text = String.format("%.1fs", delayMs / 1000.0)
+        analyzeButton?.apply {
+            if (running) {
+                text = "连线·开"
+                background = roundBackground(0xFF00897B.toInt(), dp8().toFloat())
+            }
+        }
+        connectStatus?.text = "连线分析：" + message.ifBlank { if (running) "运行中" else "待机" }
+    }
+
+    override fun updateMiniBoard(position: com.xqassist.core.Position?, hint: Quad?, status: String) {
+        miniBoard?.position = position
+        miniBoard?.hintMove = hint
+        miniBoard?.statusLine = status
+    }
+
     override fun onDestroy() {
         overlayDisplay = null
         root?.let { wm.removeView(it) }
@@ -412,6 +476,12 @@ class OverlayService : Service(), OverlayDisplay {
         recognizeButton = null
         analyzeButton = null
         playButton = null
+        autoButton = null
+        calibrateButton = null
+        sideButton = null
+        delayText = null
+        miniBoard = null
+        connectStatus = null
         super.onDestroy()
     }
 

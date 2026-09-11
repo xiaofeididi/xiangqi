@@ -25,6 +25,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.xqassist.capture.CaptureService
 import com.xqassist.core.Notation
+import com.xqassist.connection.ConnectSession
 import com.xqassist.connection.LiveLinkService
 import com.xqassist.engine.CloudBook
 import com.xqassist.engine.BookMove
@@ -131,9 +132,36 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         super.onCreate(savedInstanceState)
         OverlayService.actions = this
         controller = GameController()
+        ConnectSession.attach(this)
+        capturedBoardRect = ConnectSession.boardRect
+        capturedBoardFlipped = ConnectSession.flipped
+        flipped = ConnectSession.flipped
+        ConnectSession.onSnapshot = { snap ->
+            runOnUiThread { onConnectSnapshot(snap) }
+        }
         buildUi()
         refreshUi()
         startEngine()
+    }
+
+    private fun onConnectSnapshot(snap: ConnectSession.Snapshot) {
+        // 主界面本地棋盘跟随识别结果（编辑中不覆盖）
+        if (!controller.editMode && snap.board != null && snap.fen.isNotBlank()) {
+            val localFen = controller.exportFen().substringBefore(' ')
+            val remoteFen = snap.fen.substringBefore(' ')
+            if (localFen != remoteFen) {
+                controller.importFen(snap.fen)
+                refreshUi()
+            }
+            if (snap.result.bestmove.isNotBlank()) {
+                controller.hintFromIccs(snap.result.bestmove)
+                lastResult = snap.result
+                refreshUi()
+            }
+        }
+        statusMessage = snap.message
+        updateOverlayState()
+        renderInfo()
     }
 
     private fun startEngine() {
@@ -151,6 +179,8 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             withContext(Dispatchers.Main) {
                 engine = installed
                 engineReady = installed.isReady
+                ConnectSession.provideEngine(installed)
+                ConnectSession.provideReader(basicReader)
                 statusMessage = if (engineReady) "皮卡鱼就绪 · 红方先行" else "皮卡鱼启动失败"
                 renderInfo()
                 maybeAutoMove()
@@ -1135,6 +1165,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                     bottom = maxOf(p0.second, p1.second),
                 )
                 capturedBoardFlipped = flipped
+                ConnectSession.setBoardRect(capturedBoardRect, flipped)
                 calibrationPoints.clear()
                 closeCalibrationOverlay()
                 lifecycleScope.launch { recognizeOnce() }
@@ -1166,11 +1197,14 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             return
         }
         val reader = if (visionMode == TemplatePieceReader.MODE_WIDE) wideReader else basicReader
+        ConnectSession.provideReader(reader)
         val recognized = withContext(Dispatchers.IO) { reader.readBoard(frame, rect) }
         android.util.Log.i("Vision", "recognize: ${System.currentTimeMillis() - startedAt}ms fen=${recognized.toFen()}")
         val elapsed = System.currentTimeMillis() - startedAt
         lastRecognizedFen = recognized.toFen()
         lastRecognizedMs = elapsed
+        ConnectSession.provideEngine(engine)
+        ConnectSession.provideReader(reader)
         showRecognitionResult(lastRecognizedFen, elapsed)
     }
 
@@ -1389,11 +1423,84 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     }
 
     override fun onAnalyze() {
-        runOnUiThread { toggleAnalysisMode() }
+        runOnUiThread { toggleConnectOrAnalysis() }
     }
 
     override fun onPlayMove() {
-        runOnUiThread { playBestNow() }
+        runOnUiThread {
+            if (ConnectSession.isRunning) {
+                ConnectSession.playBestNow { ok ->
+                    statusMessage = if (ok) "已按分析结果点子" else "点子失败：请检查无障碍/着法"
+                    renderInfo()
+                }
+            } else {
+                playBestNow()
+            }
+        }
+    }
+
+    override fun onAutoMoveToggle() {
+        runOnUiThread {
+            ConnectSession.setAutoMove(!ConnectSession.autoMove)
+            statusMessage = if (ConnectSession.autoMove) "自动走已开启" else "自动走已关闭"
+            renderInfo()
+        }
+    }
+
+    override fun onDelayChange(delta: Int) {
+        runOnUiThread {
+            val next = ConnectSession.delayMs + (if (delta < 0) -200 else 200)
+            ConnectSession.setDelayMs(next)
+            statusMessage = "识别间隔 ${ConnectSession.delayMs}ms"
+            renderInfo()
+        }
+    }
+
+    override fun onSideToggle() {
+        runOnUiThread {
+            ConnectSession.toggleSide()
+            statusMessage = "行棋方：${if (ConnectSession.sideToMove == "w") "红方" else "黑方"}"
+            renderInfo()
+        }
+    }
+
+    override fun onCalibrate() {
+        runOnUiThread { startScreenRecognition() }
+    }
+
+    /** 有截屏+校准时走连线闭环；否则退回本地持续分析 */
+    private fun toggleConnectOrAnalysis() {
+        val canConnect = engineReady && CaptureService.isRunning && ConnectSession.boardRect != null
+        if (canConnect || ConnectSession.isRunning) {
+            ConnectSession.searchDepth = searchDepth
+            ConnectSession.thinkMs = thinkMs
+            ConnectSession.provideEngine(engine)
+            ConnectSession.provideReader(if (visionMode == TemplatePieceReader.MODE_WIDE) wideReader else basicReader)
+            if (ConnectSession.isRunning) {
+                ConnectSession.stop()
+                analysisMode = false
+                statusMessage = "连线分析已停止"
+            } else {
+                // 连线模式下让开本地持续分析，避免抢引擎
+                analysisMode = false
+                analysisJob?.cancel()
+                analysisJob = null
+                ConnectSession.start(engine, if (visionMode == TemplatePieceReader.MODE_WIDE) wideReader else basicReader)
+                statusMessage = "连线分析已启动"
+                if (!LiveLinkService.isConnected) {
+                    Toast.makeText(this, "无障碍未开：仅分析，无法自动走子", Toast.LENGTH_SHORT).show()
+                }
+                if (!CaptureService.isRunning) {
+                    Toast.makeText(this, "截屏未授权：请先点识别授权", Toast.LENGTH_SHORT).show()
+                }
+                if (ConnectSession.boardRect == null) {
+                    Toast.makeText(this, "未校准棋盘：请先点校准", Toast.LENGTH_SHORT).show()
+                }
+            }
+            renderInfo()
+            return
+        }
+        toggleAnalysisMode()
     }
 
     override fun onDepthChange(delta: Int) {
@@ -1431,6 +1538,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
     override fun onCloseOverlay() {
         runOnUiThread {
+            if (ConnectSession.isRunning) ConnectSession.stop()
             overlayOn = false
             OverlayService.stop(this)
             statusMessage = "悬浮窗已关闭"
@@ -1447,7 +1555,9 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             }
             OverlayService.start(this); overlayOn = true
             Toast.makeText(this, "悬浮窗已开启", Toast.LENGTH_SHORT).show()
+            updateOverlayState()
         } else {
+            if (ConnectSession.isRunning) ConnectSession.stop()
             OverlayService.stop(this); overlayOn = false
             Toast.makeText(this, "悬浮窗已关闭", Toast.LENGTH_SHORT).show()
         }
@@ -1455,8 +1565,28 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
     private fun updateOverlayState() {
         val svc = OverlayService.overlayDisplay ?: return
+        ConnectSession.searchDepth = searchDepth
+        ConnectSession.thinkMs = thinkMs
+        ConnectSession.multiPv = if (ConnectSession.isRunning) 1 else multiPv
+        val reader = if (visionMode == TemplatePieceReader.MODE_WIDE) wideReader else basicReader
+        ConnectSession.provideReader(reader)
+        ConnectSession.provideEngine(engine)
         svc.updateControls(searchDepth, thinkMs / 1000)
-        svc.updateActions(LiveLinkService.isConnected, analysisMode, controller.thinking)
+        svc.updateActions(LiveLinkService.isConnected, analysisMode || ConnectSession.isRunning, controller.thinking || ConnectSession.isRunning)
+        svc.updateConnect(
+            autoOn = ConnectSession.autoMove,
+            delayMs = ConnectSession.delayMs,
+            sideLabel = if (ConnectSession.sideToMove == "w") "红方" else "黑方",
+            running = ConnectSession.isRunning,
+            message = ConnectSession.lastMessage,
+        )
+        val hint = controller.hintMove
+        val miniPos = ConnectSession.lastBoard ?: controller.displayPos
+        val miniStatus = if (ConnectSession.lastFen.isBlank()) "未识别" else {
+            val sc = if (lastResult.bestmove.isBlank()) "" else " · " + scoreTextFor(lastResult)
+            ConnectSession.lastMessage + sc
+        }
+        svc.updateMiniBoard(miniPos, hint, miniStatus)
         val cloudText = if (displayCloud) {
             if (cloudLoading) "查询中" else cloudMoves.firstOrNull()?.let { Notation.moveToChinese(controller.displayPos, it.move) + " " + it.winrate } ?: "无"
         } else "关"
@@ -1531,10 +1661,13 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     }
 
     override fun onDestroy() {
-        super.onDestroy()
+        ConnectSession.onSnapshot = null
+        OverlayService.actions = null
+        ConnectSession.stop()
         analysisMode = false
         engine?.stop()
         engine = null
+        super.onDestroy()
     }
 
     companion object {

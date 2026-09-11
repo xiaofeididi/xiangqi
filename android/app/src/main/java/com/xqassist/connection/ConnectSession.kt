@@ -1,0 +1,442 @@
+package com.xqassist.connection
+
+import android.content.Context
+import android.content.SharedPreferences
+import android.graphics.Bitmap
+import com.xqassist.capture.CaptureService
+import com.xqassist.core.Position
+import com.xqassist.engine.EngineResult
+import com.xqassist.engine.UcciEngine
+import com.xqassist.vision.BoardRect
+import com.xqassist.vision.ChessboardReader
+import com.xqassist.vision.GridGeometry
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * 连线分析会话：截屏 → 识盘 → 引擎分析 → 悬浮展示 → 可选无障碍点子。
+ * 不绑定 Activity 生命周期，悬浮窗可在主界面后台时继续跑。
+ */
+object ConnectSession {
+
+    enum class State {
+        IDLE, WAITING_PERMISSION, WAITING_FRAME, RECOGNIZING, ANALYZING, AUTO_PLAYING, PAUSED, ERROR
+    }
+
+    data class Snapshot(
+        val state: State = State.IDLE,
+        val message: String = "",
+        val fen: String = "",
+        val board: Position? = null,
+        val recognizeMs: Long = 0,
+        val result: EngineResult = EngineResult(),
+        val autoMove: Boolean = false,
+        val delayMs: Int = 1200,
+        val sideToMove: String = "w",
+        val running: Boolean = false,
+    )
+
+    @Volatile
+    var boardRect: BoardRect? = null
+        private set
+
+    @Volatile
+    var flipped: Boolean = false
+        private set
+
+    @Volatile
+    var autoMove: Boolean = false
+
+    @Volatile
+    var delayMs: Int = 1200
+
+    /** 识别结果里写入的行棋方（外部棋盘侧向无法可靠识别时由用户配置） */
+    @Volatile
+    var sideToMove: String = "w"
+
+    @Volatile
+    var thinkMs: Int = 3000
+
+    @Volatile
+    var searchDepth: Int = 0
+
+    @Volatile
+    var multiPv: Int = 1
+
+    @Volatile
+    var visionWide: Boolean = false
+
+    @Volatile
+    private(set) var isRunning: Boolean = false
+
+    @Volatile
+    private(set) var lastFen: String = ""
+
+    @Volatile
+    private(set) var lastResult: EngineResult = EngineResult()
+
+    @Volatile
+    private(set) var lastBoard: Position? = null
+
+    @Volatile
+    private(set) var lastMessage: String = ""
+
+    @Volatile
+    private(set) var lastState: State = State.IDLE
+
+    var onSnapshot: ((Snapshot) -> Unit)? = null
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var loopJob: Job? = null
+    private var engine: UcciEngine? = null
+    private var reader: ChessboardReader? = null
+    private var appContext: Context? = null
+
+    private const val PREFS = "connect_session"
+    private const val KEY_LEFT = "rect_left"
+    private const val KEY_TOP = "rect_top"
+    private const val KEY_RIGHT = "rect_right"
+    private const val KEY_BOTTOM = "rect_bottom"
+    private const val KEY_FLIPPED = "flipped"
+    private const val KEY_SIDE = "side"
+    private const val KEY_DELAY = "delay_ms"
+    private const val KEY_AUTO = "auto_move"
+
+    /** 连续相同 FEN 次数达到该阈值才认为局面稳定，降低闪烁误判 */
+    private const val STABLE_HITS = 2
+
+    /** 自动走子后的冷却，避免动画中途重复识别 */
+    private const val AUTO_COOLDOWN_MS = 900L
+
+    private var pendingFen = ""
+    private var pendingHits = 0
+    private var lastAutoFen = ""
+    private var lastAutoAt = 0L
+
+    fun attach(context: Context) {
+        appContext = context.applicationContext
+        loadPrefs(context.applicationContext)
+    }
+
+    fun provideEngine(value: UcciEngine?) {
+        engine = value
+    }
+
+    fun provideReader(value: ChessboardReader?) {
+        reader = value
+    }
+
+    fun setBoardRect(rect: BoardRect?, flippedBoard: Boolean = flipped) {
+        boardRect = rect
+        flipped = flippedBoard
+        appContext?.let { savePrefs(it) }
+        publish("棋盘范围已更新")
+    }
+
+    fun setSide(side: String) {
+        if (side !in setOf("w", "b")) return
+        sideToMove = side
+        appContext?.let { savePrefs(it) }
+        publish("行棋方：${if (side == "w") "红" else "黑"}")
+    }
+
+    fun toggleSide() = setSide(if (sideToMove == "w") "b" else "w")
+
+    fun setAutoMove(enabled: Boolean) {
+        autoMove = enabled
+        appContext?.let { savePrefs(it) }
+        publish(if (enabled) "自动走：开" else "自动走：关")
+    }
+
+    fun setDelayMs(value: Int) {
+        delayMs = value.coerceIn(400, 8000)
+        appContext?.let { savePrefs(it) }
+        publish("识别间隔 ${delayMs}ms")
+    }
+
+    fun start(engineValue: UcciEngine? = engine, readerValue: ChessboardReader? = reader) {
+        if (isRunning) return
+        engineValue?.let { engine = it }
+        readerValue?.let { reader = it }
+        if (engine?.isReady != true) {
+            publish("引擎未就绪", State.ERROR)
+            return
+        }
+        if (reader == null) {
+            publish("识别器未就绪", State.ERROR)
+            return
+        }
+        if (!CaptureService.isRunning) {
+            publish("请先开启屏幕识别授权", State.WAITING_PERMISSION)
+        }
+        if (boardRect == null) {
+            publish("请先标定棋盘范围", State.WAITING_PERMISSION)
+        }
+        pendingFen = ""
+        pendingHits = 0
+        lastAutoFen = ""
+        isRunning = true
+        loopJob = scope.launch {
+            publish("连线分析已启动")
+            while (isActive && isRunning) {
+                tick()
+                delay(delayMs.toLong())
+            }
+        }
+    }
+
+    fun stop() {
+        isRunning = false
+        loopJob?.cancel()
+        loopJob = null
+        pendingFen = ""
+        pendingHits = 0
+        publish("连线分析已停止", State.IDLE)
+    }
+
+    fun toggle(engineValue: UcciEngine? = engine, readerValue: ChessboardReader? = reader) {
+        if (isRunning) stop() else start(engineValue, readerValue)
+    }
+
+    /** 立即识别一次（不启动循环），用于校准后验证 */
+    suspend fun recognizeOnce(readerValue: ChessboardReader? = reader): Position? {
+        val r = readerValue ?: reader ?: return null
+        val rect = boardRect ?: return null
+        val frame = withContext(Dispatchers.IO) { CaptureService.copyLatestBitmap() } ?: return null
+        return withContext(Dispatchers.IO) { readBoardStable(r, frame, rect) }
+    }
+
+    /** 手动出招：用当前分析结果在目标 App 上点一步 */
+    fun playBestNow(onDone: ((Boolean) -> Unit)? = null) {
+        val result = lastResult
+        val rect = boardRect
+        val iccs = result.bestmove
+        if (rect == null || iccs.isBlank()) {
+            onDone?.invoke(false)
+            return
+        }
+        scope.launch {
+            val ok = autoPlay(iccs, rect)
+            withContext(Dispatchers.Main) { onDone?.invoke(ok) }
+        }
+    }
+
+    private suspend fun tick() {
+        val eng = engine
+        val rd = reader
+        val rect = boardRect
+        if (eng?.isReady != true || rd == null || rect == null) {
+            publish(
+                when {
+                    eng?.isReady != true -> "引擎未就绪"
+                    rd == null -> "识别器未就绪"
+                    else -> "请先标定棋盘范围"
+                },
+                State.WAITING_PERMISSION,
+            )
+            return
+        }
+        if (!CaptureService.isRunning) {
+            publish("屏幕识别未授权", State.WAITING_PERMISSION)
+            return
+        }
+
+        // 自动走子冷却，避免读到动画中间态
+        if (autoMove && System.currentTimeMillis() - lastAutoAt < AUTO_COOLDOWN_MS) {
+            publish("走子动画等待中…", State.PAUSED)
+            return
+        }
+
+        val frame = withContext(Dispatchers.IO) { CaptureService.copyLatestBitmap() }
+        if (frame == null) {
+            publish("等待截屏画面…", State.WAITING_FRAME)
+            return
+        }
+
+        publish("识别中…", State.RECOGNIZING)
+        val started = System.currentTimeMillis()
+        val board = withContext(Dispatchers.IO) { readBoardStable(rd, frame, rect) }
+        val elapsed = System.currentTimeMillis() - started
+        if (board == null) {
+            publish("识别失败：画面异常", State.ERROR)
+            return
+        }
+
+        val boardFen = boardFenWithSide(board)
+        if (boardFen == lastAutoFen && System.currentTimeMillis() - lastAutoAt < AUTO_COOLDOWN_MS * 2) {
+            publish("等待对方走子…", State.PAUSED)
+            return
+        }
+
+        // 稳定窗口：连续相同才认定
+        if (boardFen != pendingFen) {
+            pendingFen = boardFen
+            pendingHits = 1
+            publish("识别中…（校验 $pendingHits/$STABLE_HITS）", State.RECOGNIZING)
+            return
+        }
+        pendingHits++
+        if (pendingHits < STABLE_HITS) {
+            publish("识别中…（校验 $pendingHits/$STABLE_HITS）", State.RECOGNIZING)
+            return
+        }
+
+        lastBoard = board
+        lastFen = boardFen
+        publish("已识别 · ${elapsed}ms", State.RECOGNIZING, fen = boardFen, board = board, recognizeMs = elapsed)
+
+        // 局面未变且已有结果 → 只刷新，不重算
+        if (boardFen == lastResult.fen && lastResult.bestmove.isNotBlank()) {
+            publish("局面未变", State.ANALYZING, fen = boardFen, board = board, result = lastResult)
+            return
+        }
+
+        publish("引擎分析…", State.ANALYZING, fen = boardFen, board = board)
+        val result = eng.analyze(
+            fen = boardFen,
+            movetimeMs = thinkMs,
+            depth = searchDepth,
+            multiPv = multiPv.coerceIn(1, 5),
+            infinite = false,
+            history = emptyList(),
+        )
+        if (result.bestmove.isBlank()) {
+            publish("引擎无着法", State.ERROR, fen = boardFen, board = board)
+            return
+        }
+        lastResult = result
+        publish(
+            "分析完成 · 深度${result.depth}",
+            State.ANALYZING,
+            fen = boardFen,
+            board = board,
+            result = result,
+            recognizeMs = elapsed,
+        )
+
+        if (autoMove && isRunning) {
+            publish("自动走子…", State.AUTO_PLAYING, fen = boardFen, board = board, result = result)
+            val ok = autoPlay(result.bestmove, rect)
+            if (ok) {
+                lastAutoFen = boardFen
+                lastAutoAt = System.currentTimeMillis()
+                publish("已走 ${result.bestmove}", State.AUTO_PLAYING, fen = boardFen, board = board, result = result)
+            } else {
+                publish("自动走子失败（检查无障碍）", State.ERROR, fen = boardFen, board = board, result = result)
+            }
+        }
+    }
+
+    private fun readBoardStable(reader: ChessboardReader, frame: Bitmap, rect: BoardRect): Position? {
+        return try {
+            reader.readBoard(frame, rect)
+        } catch (t: Throwable) {
+            android.util.Log.w("Connect", "recognize failed", t)
+            null
+        }
+    }
+
+    private fun boardFenWithSide(board: Position): String {
+        val parts = board.toFen().trim().split(Regex("\\s+")).toMutableList()
+        while (parts.size < 2) parts.add("w")
+        parts[1] = sideToMove
+        return parts.joinToString(" ")
+    }
+
+    private fun autoPlay(iccs: String, rect: BoardRect): Boolean {
+        if (!LiveLinkService.isConnected) return false
+        val match = Regex("([a-i])([0-9])([a-i])([0-9])").matchEntentOrNull(iccs) ?: return false
+        val fromFile = Position.FILE_NAMES.indexOf(match.first)
+        val fromIccsRank = match.second
+        val toFile = Position.FILE_NAMES.indexOf(match.third)
+        val toIccsRank = match.fourth
+        if (fromFile < 0 || toFile < 0) return false
+        val fromRank = 9 - fromIccsRank
+        val toRank = 9 - toIccsRank
+        val (fx, fy) = GridGeometry.intersection(rect, fromRank, fromFile)
+        val (tx, ty) = GridGeometry.intersection(rect, toRank, toFile)
+        val tappedFrom = LiveLinkService.tapAtSync(fx, fy)
+        if (!tappedFrom) return false
+        Thread.sleep(120)
+        val tappedTo = LiveLinkService.tapAtSync(tx, ty)
+        return tappedTo
+    }
+
+    private fun Regex.matchEntentOrNull(input: String): IccsParts? {
+        val m = matchEntire(input.trim().lowercase()) ?: return null
+        return IccsParts(
+            m.groupValues[1],
+            m.groupValues[2].toInt(),
+            m.groupValues[3],
+            m.groupValues[4].toInt(),
+        )
+    }
+
+    private data class IccsParts(val first: String, val second: Int, val third: String, val fourth: Int)
+
+    private fun publish(
+        message: String,
+        state: State = lastState,
+        fen: String = lastFen,
+        board: Position? = lastBoard,
+        result: EngineResult = lastResult,
+        recognizeMs: Long = 0,
+    ) {
+        lastMessage = message
+        lastState = state
+        val snap = Snapshot(
+            state = state,
+            message = message,
+            fen = fen,
+            board = board,
+            recognizeMs = recognizeMs,
+            result = result,
+            autoMove = autoMove,
+            delayMs = delayMs,
+            sideToMove = sideToMove,
+            running = isRunning,
+        )
+        onSnapshot?.invoke(snap)
+    }
+
+    private fun prefs(context: Context): SharedPreferences =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    private fun loadPrefs(context: Context) {
+        val p = prefs(context)
+        val left = p.getInt(KEY_LEFT, Int.MIN_VALUE)
+        val top = p.getInt(KEY_TOP, Int.MIN_VALUE)
+        val right = p.getInt(KEY_RIGHT, Int.MIN_VALUE)
+        val bottom = p.getInt(KEY_BOTTOM, Int.MIN_VALUE)
+        if (left != Int.MIN_VALUE && top != Int.MIN_VALUE && right != Int.MIN_VALUE && bottom != Int.MIN_VALUE) {
+            boardRect = BoardRect(left, top, right, bottom)
+        }
+        flipped = p.getBoolean(KEY_FLIPPED, false)
+        sideToMove = p.getString(KEY_SIDE, "w") ?: "w"
+        delayMs = p.getInt(KEY_DELAY, 1200)
+        autoMove = p.getBoolean(KEY_AUTO, false)
+    }
+
+    private fun savePrefs(context: Context) {
+        val rect = boardRect
+        prefs(context).edit().apply {
+            if (rect != null) {
+                putInt(KEY_LEFT, rect.left)
+                putInt(KEY_TOP, rect.top)
+                putInt(KEY_RIGHT, rect.right)
+                putInt(KEY_BOTTOM, rect.bottom)
+            }
+            putBoolean(KEY_FLIPPED, flipped)
+            putString(KEY_SIDE, sideToMove)
+            putInt(KEY_DELAY, delayMs)
+            putBoolean(KEY_AUTO, autoMove)
+            apply()
+        }
+    }
+}
