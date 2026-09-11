@@ -179,6 +179,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             if (localFen != remoteFen) {
                 controller.importFen(snap.fen)
                 refreshUi()
+                if (displayCloud) queryCloud()
             }
             if (snap.result.bestmove.isNotBlank()) {
                 controller.hintFromIccs(snap.result.bestmove)
@@ -1537,14 +1538,21 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     }
 
     override fun onAnalyze() {
-        runOnUiThread { toggleConnectOrAnalysis() }
+        runOnUiThread {
+            // 分析：不套用深度/时间；云库 + 皮卡鱼
+            ConnectSession.useEngineLimits = false
+            toggleConnectOrAnalysis()
+        }
     }
 
     override fun onPlayMove() {
         runOnUiThread {
-            if (ConnectSession.isRunning) {
+            if (ConnectSession.isRunning || ConnectSession.lastFen.isNotBlank()) {
+                ConnectSession.useEngineLimits = true
+                ConnectSession.provideEngine(engine)
+                ConnectSession.provideReader(if (visionMode == TemplatePieceReader.MODE_WIDE) wideReader else basicReader)
                 ConnectSession.playBestNow { ok ->
-                    statusMessage = if (ok) "已按分析结果点子" else "点子失败：请检查无障碍/着法"
+                    statusMessage = if (ok) "已按分析结果出子" else "出子失败：请检查无障碍/着法"
                     renderInfo()
                 }
             } else {
@@ -1589,8 +1597,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     private fun toggleConnectOrAnalysis() {
         val canConnect = engineReady && CaptureService.isRunning && ConnectSession.boardRect != null
         if (canConnect || ConnectSession.isRunning) {
-            ConnectSession.searchDepth = searchDepth
-            ConnectSession.thinkMs = thinkMs
+            ConnectSession.useEngineLimits = false
             ConnectSession.provideEngine(engine)
             ConnectSession.provideReader(if (visionMode == TemplatePieceReader.MODE_WIDE) wideReader else basicReader)
             if (ConnectSession.isRunning) {
@@ -1774,14 +1781,22 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         val engineSummary = when {
             !engineReady -> "未就绪"
             controller.thinking -> "思考中"
+            ConnectSession.lastRecognizedOk && lastResult.bestmove.isBlank() -> "已识别，分析中…"
             lastResult.bestmove.isBlank() -> "-"
             else -> lastResult.chinese(controller.displayPos)
         }
-        val engineDetail = if (lastResult.bestmove.isBlank()) "" else {
+        // 出子才展示深度/时间；纯分析只展示着法
+        val engineDetail = if (lastResult.bestmove.isBlank()) {
+            if (ConnectSession.lastRecognizedSummary.isNotBlank()) ConnectSession.lastRecognizedSummary else ""
+        } else if (ConnectSession.useEngineLimits) {
             val score = scoreTextFor(lastResult)
             val time = String.format("%.1f秒", lastResult.timeMs / 1000.0)
             val path = pvChinese(lastResult.pv).ifBlank { lastResult.chinese(controller.displayPos) }
             "深度${lastResult.depth} · $score · $time\n$path"
+        } else {
+            val score = scoreTextFor(lastResult)
+            val path = pvChinese(lastResult.pv).ifBlank { lastResult.chinese(controller.displayPos) }
+            "皮卡鱼 $score\n$path"
         }
         svc.updateInfo(cloudText, engineSummary, engineDetail)
     }

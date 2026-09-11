@@ -145,7 +145,7 @@ class OverlayService : Service(), OverlayDisplay {
         card.addView(spacer(dp(5)))
 
         infoText = TextView(this).apply {
-            text = "云库：-\n引擎：-\n-"
+            text = "连线：待机\n云库：-\n引擎：-"
             textSize = 11.5f
             setTextColor(Color.WHITE)
             setLineSpacing(dp(1).toFloat(), 1f)
@@ -406,8 +406,14 @@ class OverlayService : Service(), OverlayDisplay {
     }
 
     override fun updateInfo(cloud: String, engineSummary: String, engineDetail: String) {
-        infoText?.text = "云库：" + cloud.ifBlank { "-" } + "\n引擎：" + engineSummary.ifBlank { "-" } +
-            (if (engineDetail.isBlank()) "" else "\n" + engineDetail)
+        infoText?.text = buildString {
+            append("连线：").append(if (autoOn || analyzeButton?.text?.contains("开") == true) "运行中" else "待机")
+            append("\n云库：").append(cloud.ifBlank { "-" })
+            append("\n引擎：").append(engineSummary.ifBlank { "-" })
+            if (engineDetail.isNotBlank()) {
+                append("\n").append(engineDetail)
+            }
+        }
     }
 
     override fun updateOpacity(alpha: Float) {
@@ -427,6 +433,14 @@ class OverlayService : Service(), OverlayDisplay {
                 autoOnValue -> "分析(自动)"
                 else -> "分析"
             }
+        }
+        val prefix = if (message.contains("已正常识别")) "✓ " else ""
+        val line = prefix + message.ifBlank { if (running) "运行中" else "待机" }
+        // 紧凑悬浮窗：把识别状态放在 info 第一行
+        infoText?.let { tv ->
+            val old = tv.text?.toString() ?: ""
+            val rest = old.lines().drop(1).joinToString("\n")
+            tv.text = "连线：$line" + if (rest.isBlank()) "" else "\n$rest"
         }
     }
 

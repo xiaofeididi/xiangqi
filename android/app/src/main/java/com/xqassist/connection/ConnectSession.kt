@@ -70,6 +70,10 @@ object ConnectSession {
     @Volatile
     var searchDepth: Int = 0
 
+    /** true = 出子模式，使用 thinkMs/searchDepth；false = 纯分析，不套用深度/时间设置 */
+    @Volatile
+    var useEngineLimits: Boolean = false
+
     @Volatile
     var multiPv: Int = 1
 
@@ -78,6 +82,15 @@ object ConnectSession {
 
     @Volatile
     var isRunning: Boolean = false
+        private set
+
+    /** 最近一次识别是否成功（稳定局面） */
+    @Volatile
+    var lastRecognizedOk: Boolean = false
+        private set
+
+    @Volatile
+    var lastRecognizedSummary: String = ""
         private set
 
     @Volatile
@@ -193,6 +206,8 @@ object ConnectSession {
         pendingFen = ""
         pendingHits = 0
         lastAutoFen = ""
+        lastRecognizedOk = false
+        lastRecognizedSummary = ""
         isRunning = true
         loopJob = scope.launch {
             publish("连线分析已启动")
@@ -209,6 +224,8 @@ object ConnectSession {
         loopJob = null
         pendingFen = ""
         pendingHits = 0
+        lastRecognizedOk = false
+        lastRecognizedSummary = ""
         publish("连线分析已停止", State.IDLE)
     }
 
@@ -224,19 +241,59 @@ object ConnectSession {
         return withContext(Dispatchers.IO) { readBoardStable(r, frame, rect) }
     }
 
-    /** 手动出招：用当前分析结果在目标 App 上点一步 */
+    /** 手动出招：用当前分析结果在目标 App 上点一步（此路径才套用深度/时间） */
     fun playBestNow(onDone: ((Boolean) -> Unit)? = null) {
-        val result = lastResult
+        val eng = engine
+        val fen = lastFen
         val rect = boardRect
-        val iccs = result.bestmove
-        if (rect == null || iccs.isBlank()) {
+        if (eng?.isReady != true || fen.isBlank() || rect == null) {
             onDone?.invoke(false)
             return
         }
         scope.launch {
+            // 出子：使用设置里的深度/时间
+            val result = eng.analyze(
+                fen = fen,
+                movetimeMs = thinkMs,
+                depth = searchDepth,
+                multiPv = 1,
+                infinite = false,
+                history = emptyList(),
+            )
+            val iccs = result.bestmove
+            if (iccs.isBlank()) {
+                withContext(Dispatchers.Main) { onDone?.invoke(false) }
+                return@launch
+            }
+            lastResult = result
             val ok = autoPlay(iccs, rect)
+            if (ok) {
+                lastAutoFen = fen
+                lastAutoAt = System.currentTimeMillis()
+                publish("已出子 ${iccs} · 深度${result.depth}", State.AUTO_PLAYING, fen = fen, result = result)
+            }
             withContext(Dispatchers.Main) { onDone?.invoke(ok) }
         }
+    }
+
+    private fun resultText(result: EngineResult): String {
+        val score = when {
+            result.mateIn != null -> "杀${result.mateIn}"
+            result.scoreCp != null -> String.format("%.2f兵", result.scoreCp / 100.0)
+            else -> "-"
+        }
+        return "深度${result.depth} $score"
+    }
+
+    private fun summarizeBoard(board: Position, elapsedMs: Long): String {
+        var pieces = 0
+        for (r in 0 until 10) {
+            for (f in 0 until 9) {
+                if (board.pieceAt(r, f) != null) pieces++
+            }
+        }
+        val side = if (sideToMove == "w") "红方" else "黑方"
+        return "${side}行棋 · ${pieces}子 · ${elapsedMs}ms"
     }
 
     private suspend fun tick() {
@@ -301,30 +358,45 @@ object ConnectSession {
 
         lastBoard = board
         lastFen = boardFen
-        publish("已识别 · ${elapsed}ms", State.RECOGNIZING, fen = boardFen, board = board, recognizeMs = elapsed)
+        lastRecognizedOk = true
+        lastRecognizedSummary = summarizeBoard(board, elapsed)
+        publish(
+            "已正常识别 · ${lastRecognizedSummary}",
+            State.RECOGNIZING,
+            fen = boardFen,
+            board = board,
+            recognizeMs = elapsed,
+        )
 
         // 局面未变且已有结果 → 只刷新，不重算
         if (boardFen == lastResult.fen && lastResult.bestmove.isNotBlank()) {
-            publish("局面未变", State.ANALYZING, fen = boardFen, board = board, result = lastResult)
+            publish(
+                "已正常识别 · 皮卡鱼:${resultText(lastResult)}",
+                State.ANALYZING,
+                fen = boardFen,
+                board = board,
+                result = lastResult,
+            )
             return
         }
 
-        publish("引擎分析…", State.ANALYZING, fen = boardFen, board = board)
+        publish("皮卡鱼分析中…", State.ANALYZING, fen = boardFen, board = board)
         val result = eng.analyze(
             fen = boardFen,
-            movetimeMs = thinkMs,
-            depth = searchDepth,
+            // 纯分析：不套用设置里的深度/时间，固定短算一轮
+            movetimeMs = if (useEngineLimits) thinkMs else 800,
+            depth = if (useEngineLimits) searchDepth else 0,
             multiPv = multiPv.coerceIn(1, 5),
             infinite = false,
             history = emptyList(),
         )
         if (result.bestmove.isBlank()) {
-            publish("引擎无着法", State.ERROR, fen = boardFen, board = board)
+            publish("已正常识别 · 引擎无着法", State.ERROR, fen = boardFen, board = board)
             return
         }
         lastResult = result
         publish(
-            "分析完成 · 深度${result.depth}",
+            "已正常识别 · 皮卡鱼:${resultText(result)}",
             State.ANALYZING,
             fen = boardFen,
             board = board,
