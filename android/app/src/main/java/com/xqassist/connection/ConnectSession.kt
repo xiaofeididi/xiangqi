@@ -51,10 +51,10 @@ object ConnectSession {
         private set
 
     @Volatile
-    var autoMove: Boolean = false
+    var autoMoveOn: Boolean = false
 
     @Volatile
-    var delayMs: Int = 1200
+    var intervalMs: Int = 1200
 
     /** 识别结果里写入的行棋方（外部棋盘侧向无法可靠识别时由用户配置） */
     @Volatile
@@ -155,15 +155,15 @@ object ConnectSession {
     fun toggleSide() = setSide(if (sideToMove == "w") "b" else "w")
 
     fun setAutoMove(enabled: Boolean) {
-        autoMove = enabled
+        autoMoveOn = enabled
         appContext?.let { savePrefs(it) }
         publish(if (enabled) "自动走：开" else "自动走：关")
     }
 
     fun setDelayMs(value: Int) {
-        delayMs = value.coerceIn(400, 8000)
+        intervalMs = value.coerceIn(400, 8000)
         appContext?.let { savePrefs(it) }
-        publish("识别间隔 ${delayMs}ms")
+        publish("识别间隔 ${intervalMs}ms")
     }
 
     fun start(engineValue: UcciEngine? = engine, readerValue: ChessboardReader? = reader) {
@@ -192,7 +192,7 @@ object ConnectSession {
             publish("连线分析已启动")
             while (isActive && isRunning) {
                 tick()
-                delay(delayMs.toLong())
+                delay(intervalMs.toLong())
             }
         }
     }
@@ -254,7 +254,7 @@ object ConnectSession {
         }
 
         // 自动走子冷却，避免读到动画中间态
-        if (autoMove && System.currentTimeMillis() - lastAutoAt < AUTO_COOLDOWN_MS) {
+        if (autoMoveOn && System.currentTimeMillis() - lastAutoAt < AUTO_COOLDOWN_MS) {
             publish("走子动画等待中…", State.PAUSED)
             return
         }
@@ -326,7 +326,7 @@ object ConnectSession {
             recognizeMs = elapsed,
         )
 
-        if (autoMove && isRunning) {
+        if (autoMoveOn && isRunning) {
             publish("自动走子…", State.AUTO_PLAYING, fen = boardFen, board = board, result = result)
             val ok = autoPlay(result.bestmove, rect)
             if (ok) {
@@ -403,8 +403,8 @@ object ConnectSession {
             board = board,
             recognizeMs = recognizeMs,
             result = result,
-            autoMove = autoMove,
-            delayMs = delayMs,
+            autoMove = autoMoveOn,
+            delayMs = intervalMs,
             sideToMove = sideToMove,
             running = isRunning,
         )
@@ -425,8 +425,8 @@ object ConnectSession {
         }
         flipped = p.getBoolean(KEY_FLIPPED, false)
         sideToMove = p.getString(KEY_SIDE, "w") ?: "w"
-        delayMs = p.getInt(KEY_DELAY, 1200)
-        autoMove = p.getBoolean(KEY_AUTO, false)
+        intervalMs = p.getInt(KEY_DELAY, 1200)
+        autoMoveOn = p.getBoolean(KEY_AUTO, false)
     }
 
     private fun savePrefs(context: Context) {
@@ -440,8 +440,8 @@ object ConnectSession {
             }
             putBoolean(KEY_FLIPPED, flipped)
             putString(KEY_SIDE, sideToMove)
-            putInt(KEY_DELAY, delayMs)
-            putBoolean(KEY_AUTO, autoMove)
+            putInt(KEY_DELAY, intervalMs)
+            putBoolean(KEY_AUTO, autoMoveOn)
             apply()
         }
     }

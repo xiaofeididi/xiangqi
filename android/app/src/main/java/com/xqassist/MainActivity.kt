@@ -1441,17 +1441,17 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
     override fun onAutoMoveToggle() {
         runOnUiThread {
-            ConnectSession.setAutoMove(!ConnectSession.autoMove)
-            statusMessage = if (ConnectSession.autoMove) "自动走已开启" else "自动走已关闭"
+            ConnectSession.setAutoMove(!ConnectSession.autoMoveOn)
+            statusMessage = if (ConnectSession.autoMoveOn) "自动走已开启" else "自动走已关闭"
             renderInfo()
         }
     }
 
     override fun onDelayChange(delta: Int) {
         runOnUiThread {
-            val next = ConnectSession.delayMs + (if (delta < 0) -200 else 200)
+            val next = ConnectSession.intervalMs + (if (delta < 0) -200 else 200)
             ConnectSession.setDelayMs(next)
-            statusMessage = "识别间隔 ${ConnectSession.delayMs}ms"
+            statusMessage = "识别间隔 ${ConnectSession.intervalMs}ms"
             renderInfo()
         }
     }
@@ -1574,8 +1574,8 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         svc.updateControls(searchDepth, thinkMs / 1000)
         svc.updateActions(LiveLinkService.isConnected, analysisMode || ConnectSession.isRunning, controller.thinking || ConnectSession.isRunning)
         svc.updateConnect(
-            autoOn = ConnectSession.autoMove,
-            delayMs = ConnectSession.delayMs,
+            autoOn = ConnectSession.autoMoveOn,
+            delayMs = ConnectSession.intervalMs,
             sideLabel = if (ConnectSession.sideToMove == "w") "红方" else "黑方",
             running = ConnectSession.isRunning,
             message = ConnectSession.lastMessage,
