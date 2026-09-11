@@ -58,6 +58,8 @@ class CaptureService : Service() {
         }
 
         fun start(context: Context, resultCode: Int, data: Intent) {
+            // 先标记运行中，避免 startForegroundService 异步导致外部立刻判定未授权
+            isRunning = true
             val i = Intent(context, CaptureService::class.java)
                 .putExtra(EXTRA_RESULT_CODE, resultCode)
                 .putExtra(EXTRA_RESULT_DATA, data)
@@ -91,6 +93,7 @@ class CaptureService : Service() {
         val data = if (Build.VERSION.SDK_INT >= 33) intent?.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
                    else @Suppress("DEPRECATION") intent?.getParcelableExtra(EXTRA_RESULT_DATA)
         if (data == null || resultCode < 0) {
+            isRunning = false
             stopSelf()
             return START_NOT_STICKY
         }
@@ -104,6 +107,7 @@ class CaptureService : Service() {
             START_STICKY
         } catch (e: Throwable) {
             Log.e(TAG, "capture: projection failed", e)
+            isRunning = false
             stopSelf()
             START_NOT_STICKY
         }
@@ -119,6 +123,8 @@ class CaptureService : Service() {
         projection!!.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
                 Log.i(TAG, "capture: projection stopped")
+                isRunning = false
+                stopSelf()
             }
         }, imageHandler)
         reader!!.setOnImageAvailableListener({ activeReader ->

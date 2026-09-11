@@ -69,7 +69,6 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     private lateinit var engineRedButton: Button
     private lateinit var engineBlackButton: Button
     private lateinit var statusStrip: TextView
-    private lateinit var permissionStrip: TextView
 
     private var engine: UcciEngine? = null
     private val engineMutex = Mutex()
@@ -124,14 +123,14 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             CaptureService.start(this, result.resultCode, result.data!!)
             setStatusMessage("屏幕识别已授权")
-            Toast.makeText(this, "截屏已授权 · ${permissionChecklist()}", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "屏幕识别已打开", Toast.LENGTH_SHORT).show()
             // 授权完成后自动继续开悬浮窗
             if (hasOverlayPermission() && hasAccessibilityPermission() && !overlayOn) {
                 ensurePermissionsThenOverlay()
             }
         } else {
             setStatusMessage("屏幕识别未授权")
-            Toast.makeText(this, "截屏未授权\n${permissionChecklist()}", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "截屏被拒绝，请重试并允许", Toast.LENGTH_LONG).show()
             renderInfo()
         }
     }
@@ -241,11 +240,6 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             maxLines = 2
             setPadding(dp(2), dp(3), dp(2), 0)
         }
-        permissionStrip = TextView(this).apply {
-            textSize = 11f
-            setTextColor(Color.parseColor("#047A79"))
-            setPadding(dp(2), 0, dp(2), dp(3))
-        }
         val row1 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -282,7 +276,6 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         toolbar.addView(row1)
         toolbar.addView(row2)
         toolbar.addView(statusStrip)
-        toolbar.addView(permissionStrip)
 
         navBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -846,7 +839,6 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
     private fun renderInfo() {
         if (::statusStrip.isInitialized) statusStrip.text = statusMessage
-        if (::permissionStrip.isInitialized) permissionStrip.text = permissionChecklist()
         updateToolStates()
         updateOverlayState()
         if (bottomTab == TAB_ENGINE) renderEnginePage()
@@ -1695,7 +1687,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             return
         }
         if (!hasCapturePermission()) {
-            Toast.makeText(this, "请先允许屏幕识别（截屏）", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "请允许屏幕识别（截屏）后继续", Toast.LENGTH_SHORT).show()
             try {
                 capturePermissionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
             } catch (e: Throwable) {
