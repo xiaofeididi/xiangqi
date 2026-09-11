@@ -11,6 +11,7 @@ import com.xqassist.overlay.OverlayService
 import com.xqassist.vision.BoardAutoDetector
 import com.xqassist.vision.BoardRect
 import com.xqassist.vision.ChessboardReader
+import com.xqassist.vision.YoloDetector
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -170,7 +171,7 @@ object ConnectSession {
             publish("引擎未就绪", State.ERROR)
             return
         }
-        if (reader == null) {
+        if (!YoloDetector.isReady && reader == null) {
             publish("识别器未就绪", State.ERROR)
             return
         }
@@ -240,15 +241,14 @@ object ConnectSession {
 
     private suspend fun tick() {
         val eng = engine
+        val yoloOk = YoloDetector.isReady
         val rd = reader
-        if (eng?.isReady != true || rd == null) {
-            publish(
-                when {
-                    eng?.isReady != true -> "引擎未就绪"
-                    else -> "识别器未就绪"
-                },
-                State.ERROR,
-            )
+        if (eng?.isReady != true) {
+            publish("引擎未就绪", State.ERROR)
+            return
+        }
+        if (!yoloOk && rd == null) {
+            publish("识别器未就绪", State.ERROR)
             return
         }
         if (!CaptureService.isRunning) {
@@ -266,52 +266,29 @@ object ConnectSession {
             return
         }
 
-        var rect = boardRect
-        if (rect == null) {
-            publish("自动找棋盘中…", State.RECOGNIZING)
-            val detected = withContext(Dispatchers.IO) {
-                try {
-                    BoardAutoDetector.detect(frame)
-                } catch (t: Throwable) {
-                    Log.w(TAG, "BoardAutoDetector failed", t)
-                    null
-                }
-            }
-            if (detected != null) {
-                boardRect = detected
-                rect = detected
-                appContext?.let { savePrefs(it) }
-                publish("已找到棋盘 ${detected.right - detected.left}×${detected.bottom - detected.top}", State.RECOGNIZING)
-            } else {
-                publish("未找到棋盘：画面可能不含木色棋盘，请回助手校准", State.ERROR)
-                return
-            }
-        }
-
-        publish("识别中…", State.RECOGNIZING)
         val started = System.currentTimeMillis()
-        val board = withContext(Dispatchers.IO) {
-            try {
-                rd.readBoard(frame, rect)
-            } catch (t: Throwable) {
-                Log.w(TAG, "readBoard failed", t)
-                null
-            }
+        // 优先 Pro YOLO；失败再回退模板格点
+        val recognized = withContext(Dispatchers.IO) {
+            if (yoloOk) recognizeByYolo(frame) else recognizeByTemplate(frame, rd)
         }
         val elapsed = System.currentTimeMillis() - started
-        if (board == null) {
-            publish("识别失败：画面异常或棋盘范围不对", State.ERROR)
+
+        if (recognized is RecognizeResult.NeedRect) {
+            publish(recognized.message, State.ERROR)
             return
         }
-
+        if (recognized is RecognizeResult.Fail) {
+            publish(recognized.message, State.ERROR)
+            return
+        }
+        val ok = recognized as RecognizeResult.Ok
+        val board = ok.board
         val pieceCount = countPieces(board)
         val hasWhiteKing = hasKing(board, "w")
         val hasBlackKing = hasKing(board, "b")
-        // Pro 会在局面非法时提示「非有效局面」并跳过引擎
         if (pieceCount < 4 || !hasWhiteKing || !hasBlackKing) {
             lastRecognizedOk = false
             lastRecognizedSummary = ""
-            // 连续空盘说明矩形偏了，自动清掉重找
             if (pieceCount < 2) {
                 emptyBoardTicks++
                 if (emptyBoardTicks >= 3 && boardRect != null) {
@@ -335,10 +312,7 @@ object ConnectSession {
         }
         emptyBoardTicks = 0
 
-        // Pro m.j/m.m：红帅在上半区说明屏幕是黑方视角，整盘旋转 180°
-        val oriented = orientBoard(board)
-
-        val boardFen = boardFenWithSide(oriented)
+        val boardFen = boardFenWithSide(board)
         if (boardFen == lastAutoFen && System.currentTimeMillis() - lastAutoAt < AUTO_COOLDOWN_MS * 2) {
             publish("等待对方走子…", State.PAUSED)
             return
@@ -355,18 +329,18 @@ object ConnectSession {
             return
         }
 
-        lastBoard = oriented
+        lastBoard = board
         lastFen = boardFen
         lastRecognizedOk = true
-        lastRecognizedSummary = summarizeBoard(oriented, elapsed)
-        publish("已正常识别 · ${lastRecognizedSummary}", State.RECOGNIZING, fen = boardFen, board = oriented)
+        lastRecognizedSummary = summarizeBoard(board, elapsed)
+        publish("已正常识别 · ${lastRecognizedSummary}", State.RECOGNIZING, fen = boardFen, board = board)
 
         if (boardFen == lastResult.fen && lastResult.bestmove.isNotBlank()) {
-            publish("已正常识别 · 皮卡鱼:${resultText(lastResult)}", State.ANALYZING, fen = boardFen, board = oriented, result = lastResult)
+            publish("已正常识别 · 皮卡鱼:${resultText(lastResult)}", State.ANALYZING, fen = boardFen, board = board, result = lastResult)
             return
         }
 
-        publish("皮卡鱼分析中…", State.ANALYZING, fen = boardFen, board = oriented)
+        publish("皮卡鱼分析中…", State.ANALYZING, fen = boardFen, board = board)
         val result = eng.analyze(
             fen = boardFen,
             movetimeMs = if (useEngineLimits) thinkMs else 800,
@@ -381,31 +355,84 @@ object ConnectSession {
                         "已正常识别 · 皮卡鱼:${resultText(partial)}",
                         State.ANALYZING,
                         fen = boardFen,
-                        board = oriented,
+                        board = board,
                         result = partial,
                     )
                 }
             },
         )
         if (result.bestmove.isBlank()) {
-            publish("已正常识别 · 引擎无着法（局面可能非法）", State.ERROR, fen = boardFen, board = oriented)
+            publish("已正常识别 · 引擎无着法（局面可能非法）", State.ERROR, fen = boardFen, board = board)
             return
         }
         lastResult = result
-        publish("已正常识别 · 皮卡鱼:${resultText(result)}", State.ANALYZING, fen = boardFen, board = oriented, result = result)
+        publish("已正常识别 · 皮卡鱼:${resultText(result)}", State.ANALYZING, fen = boardFen, board = board, result = result)
 
         if (autoMoveOn && isRunning) {
-            publish("自动走子…", State.AUTO_PLAYING, fen = boardFen, board = oriented, result = result)
-            val ok = autoPlay(result.bestmove, rect)
-            if (ok) {
+            val rect = boardRect ?: return
+            publish("自动走子…", State.AUTO_PLAYING, fen = boardFen, board = board, result = result)
+            val played = autoPlay(result.bestmove, rect)
+            if (played) {
                 lastAutoFen = boardFen
                 lastAutoAt = System.currentTimeMillis()
                 Thread.sleep(500)
-                publish("已走 ${result.bestmove}", State.AUTO_PLAYING, fen = boardFen, board = oriented, result = result)
+                publish("已走 ${result.bestmove}", State.AUTO_PLAYING, fen = boardFen, board = board, result = result)
             } else {
-                publish("自动走子失败（检查无障碍）", State.ERROR, fen = boardFen, board = oriented, result = result)
+                publish("自动走子失败（检查无障碍）", State.ERROR, fen = boardFen, board = board, result = result)
             }
         }
+    }
+
+    private sealed class RecognizeResult {
+        data class Ok(val board: Position) : RecognizeResult()
+        data class Fail(val message: String) : RecognizeResult()
+        data class NeedRect(val message: String) : RecognizeResult()
+    }
+
+    /** Pro 路径：YOLO 检测 → class14 棋盘 → 格点 → 帅位翻转 */
+    private fun recognizeByYolo(frame: android.graphics.Bitmap): RecognizeResult {
+        val results = YoloDetector.detect(frame)
+            ?: return RecognizeResult.Fail("YOLO 检测失败：${YoloDetector.lastError.ifBlank { "无结果" }}")
+        var rect = boardRect
+        if (rect == null) {
+            val inner = YoloDetector.boardRect(results, minConf = 0.6f)
+            if (inner == null) {
+                return RecognizeResult.NeedRect("YOLO 未找到棋盘(class14)，请对准棋盘或回助手校准")
+            }
+            rect = YoloDetector.expandToOuter(inner)
+            boardRect = rect
+            appContext?.let { savePrefs(it) }
+        }
+        val grid = YoloDetector.toGrid(results, rect)
+        val oriented = YoloDetector.orient(grid)
+        screenFlipped = oriented !== grid
+        return RecognizeResult.Ok(YoloDetector.gridToPosition(oriented))
+    }
+
+    /** 回退：固定格点 + 模板 */
+    private fun recognizeByTemplate(frame: android.graphics.Bitmap, rd: com.xqassist.vision.ChessboardReader?): RecognizeResult {
+        var rect = boardRect
+        if (rect == null) {
+            rect = try {
+                BoardAutoDetector.detect(frame)
+            } catch (t: Throwable) {
+                Log.w(TAG, "BoardAutoDetector failed", t)
+                null
+            }
+            if (rect == null) {
+                return RecognizeResult.NeedRect("未找到棋盘，请回助手校准")
+            }
+            boardRect = rect
+            appContext?.let { savePrefs(it) }
+        }
+        val reader = rd ?: return RecognizeResult.Fail("识别器未就绪")
+        val board = try {
+            reader.readBoard(frame, rect)
+        } catch (t: Throwable) {
+            Log.w(TAG, "readBoard failed", t)
+            return RecognizeResult.Fail("识别失败：画面异常或棋盘范围不对")
+        }
+        return RecognizeResult.Ok(orientBoard(board))
     }
 
     /** 红帅在上半区 → 黑方视角，整盘 180° 旋转，使 FEN 始终红方在底 */

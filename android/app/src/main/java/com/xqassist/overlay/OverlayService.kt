@@ -32,6 +32,7 @@ import com.xqassist.core.Quad
 import com.xqassist.engine.EngineHolder
 import com.xqassist.engine.UcciEngine
 import com.xqassist.vision.TemplatePieceReader
+import com.xqassist.vision.YoloDetector
 import java.util.concurrent.atomic.AtomicBoolean
 
 interface OverlayDisplay {
@@ -147,6 +148,9 @@ class OverlayService : Service(), OverlayDisplay {
             ConnectSession.attach(applicationContext)
             ConnectSession.provideEngine(engine)
             ConnectSession.provideReader(reader)
+            if (!YoloDetector.isReady) {
+                ensureYolo()
+            }
             if (ConnectSession.isRunning) {
                 ConnectSession.stop()
                 refreshButtons()
@@ -297,6 +301,7 @@ class OverlayService : Service(), OverlayDisplay {
             ConnectSession.provideEngine(ready)
             ConnectSession.provideReader(reader)
             setStatus("皮卡鱼就绪")
+            ensureYolo()
             return
         }
         if (!engineStarting.compareAndSet(false, true)) return
@@ -314,6 +319,19 @@ class OverlayService : Service(), OverlayDisplay {
                 refreshButtons()
             }
         }
+        ensureYolo()
+    }
+
+    private fun ensureYolo() {
+        Thread {
+            val ok = YoloDetector.init(applicationContext)
+            mainHandler.post {
+                setStatus(
+                    if (ok) "YOLO 就绪 · 皮卡鱼就绪"
+                    else "YOLO 失败(${YoloDetector.lastError}) · 回退模板识别"
+                )
+            }
+        }.start()
     }
 
     private fun buildUi() {
