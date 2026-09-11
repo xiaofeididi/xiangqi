@@ -1,12 +1,15 @@
 package com.xqassist
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
@@ -24,6 +27,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.xqassist.capture.CaptureService
 import com.xqassist.core.Notation
@@ -123,6 +127,42 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     @Volatile
     private var captureGrantedAt = 0L
     private var pendingOpenOverlayAfterCapture = false
+    private var pendingLaunchCapture = false
+
+    private val notifPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        android.util.Log.i("Capture", "POST_NOTIFICATIONS granted=$granted")
+        if (pendingLaunchCapture) {
+            pendingLaunchCapture = false
+            launchScreenCaptureIntent()
+        }
+    }
+
+    /** Android 13+：没有通知权限时 startForeground 会失败，必须先申请 */
+    private fun ensureNotificationThenCapture() {
+        if (Build.VERSION.SDK_INT < 33 ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            launchScreenCaptureIntent()
+            return
+        }
+        pendingLaunchCapture = true
+        notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    private fun launchScreenCaptureIntent() {
+        try {
+            bringToFront()
+            // Android 14+/16：先起 mediaProjection FGS，再弹系统授权
+            CaptureService.startWaiting(this)
+            capturePermissionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+        } catch (e: Throwable) {
+            android.util.Log.e("Capture", "capture: permission launch failed", e)
+            Toast.makeText(this, "屏幕识别授权失败：${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
 
     private val capturePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -1097,15 +1137,8 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
     private fun startScreenRecognition() {
         if (!CaptureService.isRunning) {
-            try {
-                bringToFront()
-                // Android 14：先起 mediaProjection FGS，再弹系统授权
-                CaptureService.startWaiting(this)
-                capturePermissionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
-            } catch (e: Throwable) {
-                android.util.Log.e("Capture", "capture: permission launch failed", e)
-                Toast.makeText(this, "屏幕识别授权失败：${e.message}", Toast.LENGTH_LONG).show()
-            }
+            bringToFront()
+            ensureNotificationThenCapture()
             return
         }
         if (calibrationFrame != null && capturedBoardRect != null) {
@@ -1742,15 +1775,8 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                         android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS),
                     )
                     else -> {
-                        try {
-                            pendingOpenOverlayAfterCapture = true
-                            // Android 14：先起 mediaProjection FGS，再弹系统授权
-                            CaptureService.startWaiting(this)
-                            capturePermissionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
-                        } catch (e: Throwable) {
-                            pendingOpenOverlayAfterCapture = false
-                            Toast.makeText(this, "截屏授权失败：${e.message}", Toast.LENGTH_LONG).show()
-                        }
+                        pendingOpenOverlayAfterCapture = true
+                        ensureNotificationThenCapture()
                     }
                 }
             }

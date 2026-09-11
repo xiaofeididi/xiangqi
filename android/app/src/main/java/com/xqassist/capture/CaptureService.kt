@@ -22,6 +22,7 @@ import android.os.HandlerThread
 import android.os.IBinder
 import android.util.Log
 import android.view.WindowManager
+import androidx.core.app.ServiceCompat
 import com.xqassist.MainActivity
 
 /**
@@ -120,12 +121,25 @@ class CaptureService : Service() {
             .setContentIntent(open)
             .setOngoing(true)
             .build()
-        if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-        } else {
-            startForeground(ID, notif)
+        try {
+            ServiceCompat.startForeground(
+                this,
+                ID,
+                notif,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
+            )
+            Log.i(TAG, "capture: FGS started type=mediaProjection sdk=${Build.VERSION.SDK_INT}")
+        } catch (t: Throwable) {
+            Log.e(TAG, "capture: startForeground failed", t)
+            // 降级：不带 type（部分 ROM 仍可用），但 Android 14+ 可能拒绝 getMediaProjection
+            try {
+                startForeground(ID, notif)
+                Log.i(TAG, "capture: FGS started without type (fallback)")
+            } catch (t2: Throwable) {
+                Log.e(TAG, "capture: startForeground fallback failed", t2)
+                stopSelf()
+            }
         }
-        Log.i(TAG, "capture: FGS started type=mediaProjection")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -171,13 +185,15 @@ class CaptureService : Service() {
                     stopSelf()
                 }
             }
+            // Android 14+：必须在 createVirtualDisplay 之前 registerCallback
             projection!!.registerCallback(projectionCallback!!, callbackHandler)
 
             if (!startCaptureLikePro(projection!!)) {
                 throw IllegalStateException("createVirtualDisplay failed")
             }
             isRunning = true
-            Log.i(TAG, "capture: ready ${width}x${height}@$dpi flags=16")
+            Log.i(TAG, "capture: ready ${width}x${height}@$dpi flags=16 display=${display != null}")
+            // 系统「屏幕共享中」指示器在 VirtualDisplay 创建成功后由 SystemUI 自动显示
             START_NOT_STICKY
         } catch (t: Throwable) {
             Log.e(TAG, "capture: failed", t)
