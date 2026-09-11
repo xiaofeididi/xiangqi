@@ -129,22 +129,14 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             try {
-                val projection = mediaProjectionManager.getMediaProjection(
-                    result.resultCode,
-                    result.data!!,
-                )
-                if (projection == null) {
-                    Toast.makeText(this, "截屏授权无效，请再试一次", Toast.LENGTH_LONG).show()
-                    return@registerForActivityResult
-                }
-                CaptureService.startWithProjection(this, projection)
+                // Android 14+：必须先让 mediaProjection 前台服务起来，再在服务里 getMediaProjection
+                CaptureService.start(this, result.resultCode, result.data!!)
                 captureGrantedAt = System.currentTimeMillis()
                 Toast.makeText(this, "屏幕识别已打开", Toast.LENGTH_SHORT).show()
-                // 稍等服务就绪后再开悬浮，避免立刻再查 isRunning 导致死循环
                 if (pendingOpenOverlayAfterCapture) {
                     pendingOpenOverlayAfterCapture = false
                     lifecycleScope.launch {
-                        delay(800)
+                        delay(1000)
                         if (hasOverlayPermission() && hasAccessibilityPermission()) {
                             OverlayService.start(this@MainActivity)
                             overlayOn = true
@@ -154,7 +146,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                     }
                 }
             } catch (t: Throwable) {
-                android.util.Log.e("Capture", "getMediaProjection failed", t)
+                android.util.Log.e("Capture", "startCaptureService failed", t)
                 Toast.makeText(this, "截屏启动失败：${t.message}", Toast.LENGTH_LONG).show()
             }
         } else {

@@ -154,6 +154,7 @@ class CaptureService : Service() {
             }
             val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             mp = try {
+                // 必须在 startForeground 之后调用（onCreate 已完成 FGS）
                 mpm.getMediaProjection(resultCode, data)
             } catch (t: Throwable) {
                 Log.e(TAG, "capture: getMediaProjection failed", t)
