@@ -513,10 +513,32 @@ object ConnectSession {
             recognizeMs = recognizeMs,
             result = result,
             autoMove = autoMoveOn,
-            delayMs = intervalMs,
+            delayMs = tapGapMs,
             sideToMove = sideToMove,
             running = isRunning,
         )
+        // 直接刷悬浮窗，MainActivity 销毁后仍可用
+        try {
+            val overlay = com.xqassist.overlay.OverlayService.overlayDisplay
+            overlay?.updateConnect(
+                autoOn = autoMoveOn,
+                delayMs = tapGapMs,
+                sideLabel = if (sideToMove == "w") "红方" else "黑方",
+                running = isRunning,
+                message = message,
+            )
+            val engText = if (result.bestmove.isBlank()) {
+                if (lastRecognizedSummary.isNotBlank()) lastRecognizedSummary else "-"
+            } else {
+                "深度${result.depth} ${result.bestmove}"
+            }
+            overlay?.updateInfo(
+                if (appContext != null) "" else "-",
+                engText,
+                "",
+            )
+        } catch (_: Throwable) {
+        }
         onSnapshot?.invoke(snap)
     }
 
