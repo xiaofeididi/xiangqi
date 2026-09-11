@@ -71,6 +71,8 @@ class OverlayService : Service(), OverlayDisplay {
     private var linkButton: Button? = null
     private var analyzeButton: Button? = null
     private var playButton: Button? = null
+    private var cloudText: TextView? = null
+    private var infoText: TextView? = null
     private var expanded = true
     private var opacity = 1f
     private var startX = 0
@@ -144,14 +146,30 @@ class OverlayService : Service(), OverlayDisplay {
         card.addView(controls)
         card.addView(spacer(dp(5)))
 
-        infoText = TextView(this).apply {
-            text = "连线：待机\n云库：-\n引擎：-"
-            textSize = 11.5f
-            setTextColor(Color.WHITE)
-            setLineSpacing(dp(1).toFloat(), 1f)
+        // 云库 / 引擎 各占一半
+        val infoRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         }
-        card.addView(infoText)
+        cloudText = TextView(this).apply {
+            text = "云库\n-"
+            textSize = 11f
+            setTextColor(Color.WHITE)
+            setLineSpacing(dp(1).toFloat(), 1f)
+            setPadding(0, 0, dp(4), 0)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+        }
+        infoText = TextView(this).apply {
+            text = "引擎\n-"
+            textSize = 11f
+            setTextColor(Color.WHITE)
+            setLineSpacing(dp(1).toFloat(), 1f)
+            setPadding(dp(4), 0, 0, 0)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+        }
+        infoRow.addView(cloudText)
+        infoRow.addView(infoText)
+        card.addView(infoRow)
 
         val resize = TextView(this).apply {
             text = "↘"
@@ -406,10 +424,10 @@ class OverlayService : Service(), OverlayDisplay {
     }
 
     override fun updateInfo(cloud: String, engineSummary: String, engineDetail: String) {
+        cloudText?.text = "云库\n" + cloud.ifBlank { "-" }
         infoText?.text = buildString {
-            append("连线：").append(if (autoOn || analyzeButton?.text?.contains("开") == true) "运行中" else "待机")
-            append("\n云库：").append(cloud.ifBlank { "-" })
-            append("\n引擎：").append(engineSummary.ifBlank { "-" })
+            append("引擎\n")
+            append(engineSummary.ifBlank { "-" })
             if (engineDetail.isNotBlank()) {
                 append("\n").append(engineDetail)
             }
@@ -434,13 +452,14 @@ class OverlayService : Service(), OverlayDisplay {
                 else -> "分析"
             }
         }
-        val prefix = if (message.contains("已正常识别")) "✓ " else ""
-        val line = prefix + message.ifBlank { if (running) "运行中" else "待机" }
-        // 紧凑悬浮窗：把识别状态放在 info 第一行
-        infoText?.let { tv ->
-            val old = tv.text?.toString() ?: ""
-            val rest = old.lines().drop(1).joinToString("\n")
-            tv.text = "连线：$line" + if (rest.isBlank()) "" else "\n$rest"
+        // 连线状态并入按钮文案
+        linkButton?.apply {
+            val connected = text == "已连接" || text == "断开"
+            // 保持已连接/断开状态由 updateActions 控制；此处只显示识别进度到出子按钮
+        }
+        playButton?.apply {
+            val prefix = if (message.contains("已正常识别")) "✓" else ""
+            text = if (running) prefix + "出子" else "出子"
         }
     }
 
@@ -463,6 +482,8 @@ class OverlayService : Service(), OverlayDisplay {
         linkButton = null
         analyzeButton = null
         playButton = null
+        cloudText = null
+        infoText = null
         super.onDestroy()
     }
 

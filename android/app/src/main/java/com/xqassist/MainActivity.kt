@@ -1890,8 +1890,9 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             return if (redMate > 0) "红优 #${redMate}" else "黑优 #${kotlin.math.abs(redMate)}"
         }
         val value = cp ?: return "-"
-        val red = value * sign / 100.0
-        return if (red >= 0) "红优 ${String.format("%.2f", red)}" else "黑优 ${String.format("%.2f", -red)}"
+        // 显示为兵值 * 100（即原 cp 分）
+        val red = value * sign
+        return if (red >= 0) "红优 ${red}" else "黑优 ${-red}"
     }
 
     private fun formatNps(value: Long): String = when {
