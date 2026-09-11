@@ -72,7 +72,6 @@ class OverlayService : Service(), OverlayDisplay {
     private var analyzeButton: Button? = null
     private var playButton: Button? = null
     private var cloudText: TextView? = null
-    private var infoText: TextView? = null
     private var expanded = true
     private var opacity = 1f
     private var startX = 0
