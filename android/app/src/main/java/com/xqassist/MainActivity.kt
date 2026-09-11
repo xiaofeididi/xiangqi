@@ -122,10 +122,13 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             CaptureService.start(this, result.resultCode, result.data!!)
-            setStatusMessage("屏幕识别已授权")
-            Toast.makeText(this, "已授权，请返回目标象棋界面点击识别", Toast.LENGTH_SHORT).show()
+            setStatusMessage("屏幕识别已授权，请点悬浮窗识别做校准")
+            Toast.makeText(this, "截屏已授权，可回目标棋盘点识别校准", Toast.LENGTH_SHORT).show()
+            OverlayService.overlayDisplay?.updateInfo("-", "截屏已授权", "请点识别校准")
         } else {
             setStatusMessage("屏幕识别未授权")
+            Toast.makeText(this, "截屏未授权，连线无法识盘", Toast.LENGTH_SHORT).show()
+            OverlayService.overlayDisplay?.updateInfo("-", "截屏未授权", "")
             renderInfo()
         }
     }
@@ -242,7 +245,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         row1.addView(tool("菜单") { menuDialog() })
         row1.addView(tool("新局") { newGame() })
         row1.addView(tool("编辑") { editDialog() })
-        row1.addView(tool("识别") { startScreenRecognition() })
+        row1.addView(tool("悔棋") { undo() })
         row1.addView(tool("悬浮") { toggleOverlay() })
         val row2 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -284,7 +287,6 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         navBar.addView(nav("后退") { browsePrevious() })
         navBar.addView(nav("前进") { browseNext() })
         navBar.addView(nav("终局") { browseLast() })
-        navBar.addView(nav("悔棋") { undo() })
         navBar.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
         board = BoardView(this).apply {
@@ -476,7 +478,6 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, toPx(4), 0, 0)
         }
-        actionRow.addView(actionButton("悔棋") { undo() })
         actionRow.addView(actionButton("悬浮窗") { toggleOverlay() })
         actionRow.addView(actionButton("开发者模式") {
             developerTapCount++
@@ -1004,7 +1005,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         val options = arrayOf(
             "新局", "打开局面", "保存局面", "编辑局面", "翻转局面",
             "引擎执黑", "引擎红黑", "分析模式", "立即出招", "强制变招",
-            "屏幕识别", "连线", "悬浮窗", "设置",
+            "连线", "悬浮窗", "设置",
         )
         AlertDialog.Builder(this).setTitle("菜单").setItems(options) { _, which ->
             when (which) {
@@ -1018,10 +1019,9 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                 7 -> toggleAnalysisMode()
                 8 -> playBestNow()
                 9 -> forceChangeMove()
-                10 -> startScreenRecognition()
-                11 -> linkDialog()
-                12 -> toggleOverlay()
-                13 -> settingsDialog()
+                10 -> linkDialog()
+                11 -> toggleOverlay()
+                12 -> settingsDialog()
             }
         }.show()
     }
@@ -1058,6 +1058,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     private fun startScreenRecognition() {
         if (!CaptureService.isRunning) {
             try {
+                bringToFront()
                 capturePermissionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
             } catch (e: Throwable) {
                 android.util.Log.e("Capture", "capture: permission launch failed", e)
@@ -1398,7 +1399,6 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         val options = arrayOf(
             "思考时间：${thinkMs / 1000} 秒", "搜索深度：${if (searchDepth == 0) "不限" else "$searchDepth 层"}",
             "候选着法数：$multiPv", "AI 回招：${if (controller.autoReply) "开" else "关"}",
-            "悔棋",
         )
         AlertDialog.Builder(this).setTitle("设置").setItems(options) { _, which ->
             when (which) {
@@ -1406,7 +1406,6 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                 1 -> AlertDialog.Builder(this).setTitle("搜索深度").setItems(depthLabels) { _, di -> searchDepth = depthValues[di] }.show()
                 2 -> AlertDialog.Builder(this).setTitle("候选着法数").setItems(arrayOf("1", "2", "3", "4", "5")) { _, mi -> multiPv = mi + 1 }.show()
                 3 -> controller.autoReply = !controller.autoReply
-                4 -> undo()
             }
             renderInfo()
         }.show()
@@ -1438,31 +1437,62 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             .setPositiveButton("确定", null).show()
     }
 
+    /** 从悬浮窗等后台入口触发时，先把主界面拉到前台，避免授权/校准对话框“看不见” */
+    private fun bringToFront() {
+        try {
+            val intent = Intent(this, MainActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
+                )
+            }
+            startActivity(intent)
+        } catch (t: Throwable) {
+            android.util.Log.w("Main", "bringToFront failed", t)
+        }
+    }
+
     override fun onLink() {
         runOnUiThread {
+            bringToFront()
             if (LiveLinkService.isConnected) {
                 LiveLinkService.disconnect()
                 statusMessage = "连线已断开"
+                toastOverlay("连线已断开")
                 renderInfo()
             } else {
                 linkDialog()
+                toastOverlay("请在弹窗中确认连线说明")
             }
         }
     }
 
     override fun onRecognize() {
         runOnUiThread {
+            bringToFront()
             val frame = if (CaptureService.isRunning) CaptureService.copyLatestBitmap() else null
             if (frame != null) {
                 calibrationFrame = frame
                 calibrationPoints.clear()
                 showCalibrationOverlay()
                 setStatusMessage("屏幕识别：点击截图中的棋盘左上角")
+                toastOverlay("请在主界面截图上点击棋盘左上角")
                 renderInfo()
             } else {
+                toastOverlay("需要截屏授权，请在弹窗里允许")
                 startScreenRecognition()
             }
         }
+    }
+
+    private fun toastOverlay(message: String) {
+        Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
+        OverlayService.overlayDisplay?.updateInfo(
+            ConnectSession.lastMessage.ifBlank { "-" },
+            statusMessage,
+            "",
+        )
     }
 
     override fun onAnalyze() {
@@ -1508,7 +1538,10 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     }
 
     override fun onCalibrate() {
-        runOnUiThread { startScreenRecognition() }
+        runOnUiThread {
+            bringToFront()
+            startScreenRecognition()
+        }
     }
 
     /** 有截屏+校准时走连线闭环；否则退回本地持续分析 */
