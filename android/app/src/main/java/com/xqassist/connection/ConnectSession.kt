@@ -325,10 +325,10 @@ object ConnectSession {
                 emptyBoardTicks = 0
             }
             val why = when {
-                pieceCount < 4 -> "子数过少($pieceCount)·请清校准重找盘或回助手重新标定"
-                !hasWhiteKing && !hasBlackKing -> "未识别到双方将帅($pieceCount子)"
-                !hasWhiteKing -> "未识别到红帅($pieceCount子)"
-                else -> "未识别到黑将($pieceCount子)"
+                pieceCount < 4 -> "子数过少(${pieceCount})·请清校准重找盘或回助手重新标定"
+                !hasWhiteKing && !hasBlackKing -> "未识别到双方将帅(${pieceCount}子)"
+                !hasWhiteKing -> "未识别到红帅(${pieceCount}子)"
+                else -> "未识别到黑将(${pieceCount}子)"
             }
             publish("非有效局面：$why", State.ERROR)
             return
