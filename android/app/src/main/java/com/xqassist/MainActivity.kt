@@ -212,7 +212,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             setPadding(dp(6), dp(4), dp(6), dp(6))
             elevation = dp(2).toFloat()
         }
-        fun tool(label: String, action: () -> Unit, accent: Boolean = false): Button = Button(this).apply {
+        fun tool(label: String, accent: Boolean = false, action: () -> Unit): Button = Button(this).apply {
             text = label
             textSize = 12f
             isAllCaps = false
