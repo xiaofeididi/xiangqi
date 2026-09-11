@@ -1543,10 +1543,9 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
     override fun onLink() {
         runOnUiThread {
-            val connected = LiveLinkService.isConnected
-            if (connected) {
-                LiveLinkService.disconnect()
-                toastOverlay("连线已断开")
+            // 只负责「连上」：已连则提示，未连则去开无障碍；长按才断开
+            if (LiveLinkService.isConnected) {
+                toastOverlay("已连接")
             } else {
                 toastOverlay("请在系统设置开启无障碍「象棋助手」")
                 try {
@@ -1555,7 +1554,18 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                     android.util.Log.w("Main", "open a11y failed", t)
                 }
             }
-            // 立刻按当前状态刷按钮
+            updateOverlayState()
+        }
+    }
+
+    override fun onLinkLongPress() {
+        runOnUiThread {
+            if (LiveLinkService.isConnected) {
+                LiveLinkService.disconnect()
+                toastOverlay("连线已断开（长按）")
+            } else {
+                toastOverlay("未连接，无需断开")
+            }
             updateOverlayState()
         }
     }

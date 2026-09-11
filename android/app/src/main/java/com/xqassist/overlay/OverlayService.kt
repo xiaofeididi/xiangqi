@@ -33,6 +33,7 @@ class OverlayService : Service(), OverlayDisplay {
 
     interface Actions {
         fun onLink()
+        fun onLinkLongPress()
         fun onRecognize()
         fun onAnalyze()
         fun onPlayMove()
@@ -195,6 +196,10 @@ class OverlayService : Service(), OverlayDisplay {
         resize.setOnTouchListener { _, event -> resizeHandler(event, p, panel, metrics.widthPixels - dp(16)) }
 
         linkButton?.setOnClickListener { actions?.onLink() }
+        linkButton?.setOnLongClickListener {
+            actions?.onLinkLongPress()
+            true
+        }
         analyzeButton?.setOnClickListener { actions?.onAnalyze() }
         // 长按出子 = 开关自动走
         playButton?.setOnClickListener { actions?.onPlayMove() }
@@ -397,9 +402,11 @@ class OverlayService : Service(), OverlayDisplay {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     override fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean) {
+        // 始终以无障碍实时状态为准，避免按钮文案过期
+        val connected = com.xqassist.connection.LiveLinkService.isConnected
         linkButton?.apply {
-            text = if (linkOn) "已连接" else "连线"
-            background = roundBackground(if (linkOn) 0xFF2E7D32.toInt() else 0xFF39465A.toInt(), dp8().toFloat())
+            text = if (connected) "已连接" else "连线"
+            background = roundBackground(if (connected) 0xFF2E7D32.toInt() else 0xFF39465A.toInt(), dp8().toFloat())
         }
         analyzeButton?.apply {
             text = when {
