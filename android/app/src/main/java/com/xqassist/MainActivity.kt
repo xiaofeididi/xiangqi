@@ -30,6 +30,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.xqassist.capture.CaptureService
+import com.xqassist.capture.ScreenHelper
 import com.xqassist.core.Notation
 import com.xqassist.connection.ConnectSession
 import com.xqassist.connection.LiveLinkService
@@ -155,9 +156,16 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     private fun launchScreenCaptureIntent() {
         try {
             bringToFront()
-            // Android 14+/16：先起 mediaProjection FGS，再弹系统授权
-            CaptureService.startWaiting(this)
-            capturePermissionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+            if (!ScreenHelper.prepare(this)) {
+                Toast.makeText(this, "无法读取屏幕尺寸", Toast.LENGTH_LONG).show()
+                return
+            }
+            val intent = ScreenHelper.createScreenCaptureIntent(this)
+            if (intent == null) {
+                Toast.makeText(this, "无法发起屏幕识别授权", Toast.LENGTH_LONG).show()
+                return
+            }
+            capturePermissionLauncher.launch(intent)
         } catch (e: Throwable) {
             android.util.Log.e("Capture", "capture: permission launch failed", e)
             Toast.makeText(this, "屏幕识别授权失败：${e.message}", Toast.LENGTH_LONG).show()
@@ -167,31 +175,25 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     private val capturePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            try {
-                // Android 14+：必须先让 mediaProjection 前台服务起来，再在服务里 getMediaProjection
-                CaptureService.applyToken(this, result.resultCode, result.data!!)
-                captureGrantedAt = System.currentTimeMillis()
-                Toast.makeText(this, "屏幕识别已打开", Toast.LENGTH_SHORT).show()
-                if (pendingOpenOverlayAfterCapture) {
-                    pendingOpenOverlayAfterCapture = false
-                    lifecycleScope.launch {
-                        delay(1000)
-                        if (hasOverlayPermission() && hasAccessibilityPermission()) {
-                            OverlayService.start(this@MainActivity)
-                            overlayOn = true
-                            Toast.makeText(this@MainActivity, "悬浮窗已开启", Toast.LENGTH_SHORT).show()
-                            updateOverlayState()
-                        }
+        val ok = ScreenHelper.create(this, result.resultCode, result.data)
+        if (ok) {
+            captureGrantedAt = System.currentTimeMillis()
+            Toast.makeText(this, "屏幕识别已打开", Toast.LENGTH_SHORT).show()
+            if (pendingOpenOverlayAfterCapture) {
+                pendingOpenOverlayAfterCapture = false
+                lifecycleScope.launch {
+                    delay(400)
+                    if (hasOverlayPermission() && hasAccessibilityPermission()) {
+                        OverlayService.start(this@MainActivity)
+                        overlayOn = true
+                        Toast.makeText(this@MainActivity, "悬浮窗已开启", Toast.LENGTH_SHORT).show()
+                        updateOverlayState()
                     }
                 }
-            } catch (t: Throwable) {
-                android.util.Log.e("Capture", "startCaptureService failed", t)
-                Toast.makeText(this, "截屏启动失败：${t.message}", Toast.LENGTH_LONG).show()
             }
         } else {
             pendingOpenOverlayAfterCapture = false
-            Toast.makeText(this, "截屏被拒绝", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "截屏启动失败，请再试一次", Toast.LENGTH_LONG).show()
         }
     }
 
