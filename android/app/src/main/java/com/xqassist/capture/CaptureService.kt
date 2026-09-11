@@ -10,8 +10,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
-import android.hardware.display.DisplayManager
-import android.hardware.display.VirtualDisplay
+import android.graphics.Point
 import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
@@ -25,9 +24,12 @@ import android.view.WindowManager
 import com.xqassist.MainActivity
 
 /**
- * 屏幕识别前台服务。
- * 注意：MediaProjection 授权 Intent 只能消费一次；系统若无 extras 重启本服务，必须静默退出，
- * 不能反复弹授权（那会导致“无限授权”）。
+ * 对齐 Pro 象棋 w2.x（ScreenHelper）的抓屏参数：
+ * - ImageReader format=1 (RGBA_8888), maxImages=2
+ * - createVirtualDisplay flags=16 (VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR)
+ * - 用 getRealSize 取真实分辨率
+ *
+ * Android 14 顺序：必须先 startForeground(type=mediaProjection)，再 getMediaProjection。
  */
 class CaptureService : Service() {
 
@@ -37,24 +39,27 @@ class CaptureService : Service() {
     private var imageThread: HandlerThread? = null
     private var imageHandler: Handler? = null
     private var projectionCallback: MediaProjection.Callback? = null
+    private var width = 0
+    private var height = 0
+    private var dpi = 0
 
     companion object {
         private const val CHANNEL = "xq_capture"
-        private const val ID = 1
+        private const val ID = 10086
         private const val TAG = "Capture"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
+        const val ACTION_START_WAITING = "start_waiting"
+        const val ACTION_APPLY_TOKEN = "apply_token"
 
         private val frameLock = Any()
         private var latestFrame: Bitmap? = null
 
-        /** start() 时暂存，便于同进程二次确认状态 */
         @Volatile
         private var lastCode: Int = -1
+
         @Volatile
         private var lastData: Intent? = null
-        @Volatile
-        private var pendingProjection: MediaProjection? = null
 
         @Volatile
         var isRunning = false
@@ -73,36 +78,33 @@ class CaptureService : Service() {
             }
         }
 
-        fun stop(context: Context) {
-            lastCode = -1
-            lastData = null
-            pendingProjection = null
-            context.stopService(Intent(context, CaptureService::class.java))
+        /** 授权前先起 FGS，满足 Android 14 getMediaProjection 前置条件 */
+        fun startWaiting(context: Context) {
+            val i = Intent(context, CaptureService::class.java).setAction(ACTION_START_WAITING)
+            context.startForegroundService(i)
         }
 
-        /**
-         * 在 Activity 授权回调里立刻 getMediaProjection，再交给本服务挂 VirtualDisplay。
-         * 避免把 token Intent 再经 startForegroundService 丢一次导致授权丢失。
-         */
-        fun startWithProjection(context: Context, projection: MediaProjection) {
-            pendingProjection = projection
-            context.startForegroundService(Intent(context, CaptureService::class.java))
-        }
-
-        fun start(context: Context, resultCode: Int, data: Intent) {
+        fun applyToken(context: Context, resultCode: Int, data: Intent) {
             lastCode = resultCode
             lastData = data
             val i = Intent(context, CaptureService::class.java)
+                .setAction(ACTION_APPLY_TOKEN)
                 .putExtra(EXTRA_RESULT_CODE, resultCode)
                 .putExtra(EXTRA_RESULT_DATA, data)
             context.startForegroundService(i)
+        }
+
+        fun stop(context: Context) {
+            lastCode = -1
+            lastData = null
+            context.stopService(Intent(context, CaptureService::class.java))
         }
     }
 
     override fun onCreate() {
         super.onCreate()
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val ch = NotificationChannel(CHANNEL, "屏幕识别", NotificationManager.IMPORTANCE_LOW)
+        val ch = NotificationChannel(CHANNEL, "屏幕识别", NotificationManager.IMPORTANCE_DEFAULT)
         nm.createNotificationChannel(ch)
         val open = PendingIntent.getActivity(
             this,
@@ -112,7 +114,7 @@ class CaptureService : Service() {
         )
         val notif = Notification.Builder(this, CHANNEL)
             .setContentTitle("屏幕识别进行中")
-            .setContentText("请保持截屏授权")
+            .setContentText("正在捕获屏幕画面")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setContentIntent(open)
             .setOngoing(true)
@@ -122,54 +124,44 @@ class CaptureService : Service() {
         } else {
             startForeground(ID, notif)
         }
+        Log.i(TAG, "capture: FGS started type=mediaProjection")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val action = intent?.action ?: ""
+        if (action == ACTION_START_WAITING) {
+            // 只起 FGS，等 token
+            Log.i(TAG, "capture: waiting for projection token")
+            return START_NOT_STICKY
+        }
+
         if (projection != null && display != null) {
             isRunning = true
             return START_NOT_STICKY
         }
 
-        // 优先使用 Activity 刚建好的 projection
-        var mp = pendingProjection
-        pendingProjection = null
-
-        if (mp == null) {
-            var resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, -1) ?: -1
-            var data: Intent? = if (Build.VERSION.SDK_INT >= 33) {
-                intent?.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                intent?.getParcelableExtra(EXTRA_RESULT_DATA)
-            }
-            if (data == null) {
-                resultCode = lastCode
-                data = lastData
-            }
-            if (data == null || resultCode < 0) {
-                Log.w(TAG, "capture: no projection token, stop quietly")
-                isRunning = false
-                stopSelf()
-                return START_NOT_STICKY
-            }
-            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            mp = try {
-                // 必须在 startForeground 之后调用（onCreate 已完成 FGS）
-                mpm.getMediaProjection(resultCode, data)
-            } catch (t: Throwable) {
-                Log.e(TAG, "capture: getMediaProjection failed", t)
-                null
-            }
+        var resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, -1) ?: -1
+        var data: Intent? = if (Build.VERSION.SDK_INT >= 33) {
+            intent?.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent?.getParcelableExtra(EXTRA_RESULT_DATA)
         }
-
-        if (mp == null) {
-            isRunning = false
-            stopSelf()
+        if (data == null) {
+            resultCode = lastCode
+            data = lastData
+        }
+        if (data == null || resultCode < 0) {
+            Log.w(TAG, "capture: no token, keep FGS waiting")
             return START_NOT_STICKY
         }
 
         return try {
+            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            val mp = mpm.getMediaProjection(resultCode, data)
+                ?: throw IllegalStateException("getMediaProjection null")
             projection = mp
+
             val callbackHandler = Handler(mainLooper)
             projectionCallback = object : MediaProjection.Callback() {
                 override fun onStop() {
@@ -180,11 +172,11 @@ class CaptureService : Service() {
             }
             projection!!.registerCallback(projectionCallback!!, callbackHandler)
 
-            if (!startCapture(projection!!)) {
+            if (!startCaptureLikePro(projection!!)) {
                 throw IllegalStateException("createVirtualDisplay failed")
             }
             isRunning = true
-            Log.i(TAG, "capture: ready")
+            Log.i(TAG, "capture: ready ${width}x${height}@$dpi flags=16")
             START_NOT_STICKY
         } catch (t: Throwable) {
             Log.e(TAG, "capture: failed", t)
@@ -194,27 +186,30 @@ class CaptureService : Service() {
         }
     }
 
-    private fun startCapture(mp: MediaProjection): Boolean {
+    /** 与 Pro w2.x.b 完全一致的参数 */
+    private fun startCaptureLikePro(mp: MediaProjection): Boolean {
         val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        val metrics = android.util.DisplayMetrics()
+        val point = Point()
         @Suppress("DEPRECATION")
-        wm.defaultDisplay.getRealMetrics(metrics)
-        val width = metrics.widthPixels.coerceAtLeast(1)
-        val height = metrics.heightPixels.coerceAtLeast(1)
-        val dpi = metrics.densityDpi.takeIf { it > 0 } ?: resources.displayMetrics.densityDpi
+        wm.defaultDisplay.getRealSize(point)
+        width = point.x.coerceAtLeast(1)
+        height = point.y.coerceAtLeast(1)
+        val metrics = resources.displayMetrics
+        dpi = metrics.densityDpi.takeIf { it > 0 } ?: 320
 
         imageThread?.quitSafely()
         imageThread = HandlerThread("xq-capture").apply { start() }
         imageHandler = Handler(imageThread!!.looper)
 
         reader?.close()
+        // Pro: ImageReader.newInstance(w, h, 1, 2)
         reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
         reader!!.setOnImageAvailableListener({ activeReader ->
             var image: Image? = null
             try {
                 image = activeReader.acquireLatestImage()
                 if (image != null) {
-                    val converted = bitmapFromImage(image)
+                    val converted = bitmapFromImage(image, width, height)
                     synchronized(frameLock) {
                         latestFrame?.recycle()
                         latestFrame = converted
@@ -227,52 +222,37 @@ class CaptureService : Service() {
             }
         }, imageHandler)
 
+        // Pro: flags = 16 (VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR)
         display = mp.createVirtualDisplay(
-            "XiangqiCapture",
+            "ProScreenCapture",
             width,
             height,
             dpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            16,
             reader!!.surface,
             null,
             null,
         )
         if (display == null) {
-            Log.e(TAG, "capture: VirtualDisplay null ${width}x${height}@$dpi")
+            Log.e(TAG, "capture: VirtualDisplay null")
             return false
         }
         return true
     }
 
-    private fun bitmapFromImage(image: Image): Bitmap {
+    /** 与 Pro w2.x.a 的拷贝方式一致，处理 rowStride 对齐 */
+    private fun bitmapFromImage(image: Image, wantW: Int, wantH: Int): Bitmap {
         val plane = image.planes[0]
-        val rowStride = plane.rowStride
+        val buffer = plane.buffer
         val pixelStride = plane.pixelStride
-        val bitmap = Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888)
-        if (rowStride == image.width * pixelStride) {
-            val buffer = java.nio.ByteBuffer.allocate(rowStride * image.height)
-            buffer.rewind()
-            plane.buffer.rewind()
-            buffer.put(plane.buffer)
-            buffer.rewind()
-            bitmap.copyPixelsFromBuffer(buffer)
-        } else {
-            val row = ByteArray(rowStride)
-            val pixels = IntArray(image.width * image.height)
-            plane.buffer.rewind()
-            for (y in 0 until image.height) {
-                plane.buffer.get(row, 0, minOf(rowStride, plane.buffer.remaining()))
-                for (x in 0 until image.width) {
-                    val offset = x * pixelStride
-                    pixels[y * image.width + x] = (row[offset].toInt() and 0xff) or
-                        ((row[offset + 1].toInt() and 0xff) shl 8) or
-                        ((row[offset + 2].toInt() and 0xff) shl 16) or
-                        ((row[offset + 3].toInt() and 0xff) shl 24)
-                }
-            }
-            bitmap.setPixels(pixels, 0, image.width, 0, 0, image.width, image.height)
-        }
-        return bitmap
+        val rowStride = plane.rowStride
+        val tmpW = wantW + ((rowStride - pixelStride * wantW) / pixelStride)
+        val raw = Bitmap.createBitmap(tmpW, wantH, Bitmap.Config.ARGB_8888)
+        buffer.rewind()
+        raw.copyPixelsFromBuffer(buffer)
+        val crop = Bitmap.createBitmap(raw, 0, 0, wantW, wantH)
+        if (crop != raw) raw.recycle()
+        return crop
     }
 
     override fun onDestroy() {

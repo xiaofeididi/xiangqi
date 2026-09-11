@@ -130,7 +130,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             try {
                 // Android 14+：必须先让 mediaProjection 前台服务起来，再在服务里 getMediaProjection
-                CaptureService.start(this, result.resultCode, result.data!!)
+                CaptureService.applyToken(this, result.resultCode, result.data!!)
                 captureGrantedAt = System.currentTimeMillis()
                 Toast.makeText(this, "屏幕识别已打开", Toast.LENGTH_SHORT).show()
                 if (pendingOpenOverlayAfterCapture) {
@@ -1098,6 +1098,8 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         if (!CaptureService.isRunning) {
             try {
                 bringToFront()
+                // Android 14：先起 mediaProjection FGS，再弹系统授权
+                CaptureService.startWaiting(this)
                 capturePermissionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
             } catch (e: Throwable) {
                 android.util.Log.e("Capture", "capture: permission launch failed", e)
@@ -1735,6 +1737,8 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                     else -> {
                         try {
                             pendingOpenOverlayAfterCapture = true
+                            // Android 14：先起 mediaProjection FGS，再弹系统授权
+                            CaptureService.startWaiting(this)
                             capturePermissionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
                         } catch (e: Throwable) {
                             pendingOpenOverlayAfterCapture = false
