@@ -71,7 +71,6 @@ class OverlayService : Service(), OverlayDisplay {
     private var linkButton: Button? = null
     private var analyzeButton: Button? = null
     private var playButton: Button? = null
-    private var recognizeButton: Button? = null
     private var expanded = true
     private var opacity = 1f
     private var startX = 0
@@ -126,11 +125,9 @@ class OverlayService : Service(), OverlayDisplay {
 
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         linkButton = actionButton("连线")
-        recognizeButton = actionButton("识别")
         analyzeButton = actionButton("分析")
         playButton = actionButton("出子")
         buttons.addView(linkButton)
-        buttons.addView(recognizeButton)
         buttons.addView(analyzeButton)
         buttons.addView(playButton)
         card.addView(buttons)
@@ -181,19 +178,14 @@ class OverlayService : Service(), OverlayDisplay {
         resize.setOnTouchListener { _, event -> resizeHandler(event, p, panel, metrics.widthPixels - dp(16)) }
 
         linkButton?.setOnClickListener { actions?.onLink() }
-        recognizeButton?.setOnClickListener { actions?.onRecognize() }
         analyzeButton?.setOnClickListener { actions?.onAnalyze() }
-        // 长按出子 = 开关自动走（悬浮窗保持四键布局）
+        // 长按出子 = 开关自动走
         playButton?.setOnClickListener { actions?.onPlayMove() }
         playButton?.setOnLongClickListener {
             actions?.onAutoMoveToggle()
             true
         }
-        // 长按识别 = 进入校准；长按分析 = 切换行棋方 / 调延迟可忽略
-        recognizeButton?.setOnLongClickListener {
-            actions?.onCalibrate()
-            true
-        }
+        // 长按分析 = 切换行棋方
         analyzeButton?.setOnLongClickListener {
             actions?.onSideToggle()
             true
@@ -455,7 +447,6 @@ class OverlayService : Service(), OverlayDisplay {
         timeText = null
         opacityText = null
         linkButton = null
-        recognizeButton = null
         analyzeButton = null
         playButton = null
         super.onDestroy()
