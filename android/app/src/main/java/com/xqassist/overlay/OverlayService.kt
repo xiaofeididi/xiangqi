@@ -146,29 +146,29 @@ class OverlayService : Service(), OverlayDisplay {
         card.addView(controls)
         card.addView(spacer(dp(5)))
 
-        // 云库 / 引擎 各占一半
+        // 引擎 / 云库 各占一半（左引擎右云库）
         val infoRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-        }
-        cloudText = TextView(this).apply {
-            text = "云库\n-"
-            textSize = 11f
-            setTextColor(Color.WHITE)
-            setLineSpacing(dp(1).toFloat(), 1f)
-            setPadding(0, 0, dp(4), 0)
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
         }
         infoText = TextView(this).apply {
             text = "引擎\n-"
             textSize = 11f
             setTextColor(Color.WHITE)
             setLineSpacing(dp(1).toFloat(), 1f)
+            setPadding(0, 0, dp(4), 0)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+        }
+        cloudText = TextView(this).apply {
+            text = "云库\n-"
+            textSize = 11f
+            setTextColor(Color.WHITE)
+            setLineSpacing(dp(1).toFloat(), 1f)
             setPadding(dp(4), 0, 0, 0)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
         }
-        infoRow.addView(cloudText)
         infoRow.addView(infoText)
+        infoRow.addView(cloudText)
         card.addView(infoRow)
 
         val resize = TextView(this).apply {

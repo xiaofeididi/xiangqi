@@ -517,7 +517,7 @@ object ConnectSession {
             sideToMove = sideToMove,
             running = isRunning,
         )
-        // 直接刷悬浮窗，MainActivity 销毁后仍可用
+        // 只刷连线状态；云库/引擎由 MainActivity.updateOverlayState 统一刷
         try {
             val overlay = com.xqassist.overlay.OverlayService.overlayDisplay
             overlay?.updateConnect(
@@ -526,16 +526,6 @@ object ConnectSession {
                 sideLabel = if (sideToMove == "w") "红方" else "黑方",
                 running = isRunning,
                 message = message,
-            )
-            val engText = if (result.bestmove.isBlank()) {
-                if (lastRecognizedSummary.isNotBlank()) lastRecognizedSummary else "-"
-            } else {
-                "深度${result.depth} ${result.bestmove}"
-            }
-            overlay?.updateInfo(
-                if (appContext != null) "" else "-",
-                engText,
-                "",
             )
         } catch (_: Throwable) {
         }

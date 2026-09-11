@@ -1590,16 +1590,10 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
     private fun toastOverlay(message: String) {
         Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
-        OverlayService.overlayDisplay?.updateInfo(
-            ConnectSession.lastMessage.ifBlank { "-" },
-            statusMessage,
-            "",
-        )
     }
 
     override fun onAnalyze() {
         runOnUiThread {
-            // 分析：不套用深度/时间；云库 + 皮卡鱼
             ConnectSession.useEngineLimits = false
             ConnectSession.provideEngine(engine)
             ConnectSession.provideReader(if (visionMode == TemplatePieceReader.MODE_WIDE) wideReader else basicReader)
@@ -1610,14 +1604,13 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                 updateOverlayState()
                 return@runOnUiThread
             }
+            // 缺截屏/校准时只提示，不强制跳回（避免打断天天象棋）
             if (!CaptureService.isRunning) {
                 toastOverlay("屏幕识别未开，请回助手重新授权")
-                bringToFront()
                 return@runOnUiThread
             }
             if (ConnectSession.boardRect == null) {
-                toastOverlay("请先校准棋盘")
-                bringToFront()
+                toastOverlay("请先在助手内校准棋盘（长按识别）")
                 return@runOnUiThread
             }
             if (!LiveLinkService.isConnected) {
