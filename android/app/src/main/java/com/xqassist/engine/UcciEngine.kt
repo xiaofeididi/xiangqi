@@ -35,7 +35,7 @@ data class EngineResult(
 
     fun scoreText(): String = when {
         mateIn != null -> "杀棋 ${mateIn}"
-        scoreCp != null -> String.format("%.2f 兵", scoreCp / 100.0)
+        scoreCp != null -> "${scoreCp}分"
         else -> "无评分"
     }
 }

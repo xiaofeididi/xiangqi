@@ -279,7 +279,7 @@ object ConnectSession {
     private fun resultText(result: EngineResult): String {
         val score = when {
             result.mateIn != null -> "杀${result.mateIn}"
-            result.scoreCp != null -> String.format("%.2f兵", result.scoreCp / 100.0)
+            result.scoreCp != null -> "${result.scoreCp}分"
             else -> "-"
         }
         return "深度${result.depth} $score"
