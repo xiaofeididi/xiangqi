@@ -39,6 +39,11 @@ object ConnectSession {
     @Volatile
     var sideToMove: String = "w"
 
+    /** 屏幕是否为黑方视角（帅在上半区）；出子坐标需 180° 镜像 */
+    @Volatile
+    var screenFlipped: Boolean = false
+        private set
+
     @Volatile
     var autoMoveOn: Boolean = false
 
@@ -309,7 +314,10 @@ object ConnectSession {
             return
         }
 
-        val boardFen = boardFenWithSide(board)
+        // Pro m.j/m.m：红帅在上半区说明屏幕是黑方视角，整盘旋转 180°
+        val oriented = orientBoard(board)
+
+        val boardFen = boardFenWithSide(oriented)
         if (boardFen == lastAutoFen && System.currentTimeMillis() - lastAutoAt < AUTO_COOLDOWN_MS * 2) {
             publish("等待对方走子…", State.PAUSED)
             return
@@ -326,18 +334,18 @@ object ConnectSession {
             return
         }
 
-        lastBoard = board
+        lastBoard = oriented
         lastFen = boardFen
         lastRecognizedOk = true
-        lastRecognizedSummary = summarizeBoard(board, elapsed)
-        publish("已正常识别 · ${lastRecognizedSummary}", State.RECOGNIZING, fen = boardFen, board = board)
+        lastRecognizedSummary = summarizeBoard(oriented, elapsed)
+        publish("已正常识别 · ${lastRecognizedSummary}", State.RECOGNIZING, fen = boardFen, board = oriented)
 
         if (boardFen == lastResult.fen && lastResult.bestmove.isNotBlank()) {
-            publish("已正常识别 · 皮卡鱼:${resultText(lastResult)}", State.ANALYZING, fen = boardFen, board = board, result = lastResult)
+            publish("已正常识别 · 皮卡鱼:${resultText(lastResult)}", State.ANALYZING, fen = boardFen, board = oriented, result = lastResult)
             return
         }
 
-        publish("皮卡鱼分析中…", State.ANALYZING, fen = boardFen, board = board)
+        publish("皮卡鱼分析中…", State.ANALYZING, fen = boardFen, board = oriented)
         val result = eng.analyze(
             fen = boardFen,
             movetimeMs = if (useEngineLimits) thinkMs else 800,
@@ -352,31 +360,50 @@ object ConnectSession {
                         "已正常识别 · 皮卡鱼:${resultText(partial)}",
                         State.ANALYZING,
                         fen = boardFen,
-                        board = board,
+                        board = oriented,
                         result = partial,
                     )
                 }
             },
         )
         if (result.bestmove.isBlank()) {
-            publish("已正常识别 · 引擎无着法（局面可能非法）", State.ERROR, fen = boardFen, board = board)
+            publish("已正常识别 · 引擎无着法（局面可能非法）", State.ERROR, fen = boardFen, board = oriented)
             return
         }
         lastResult = result
-        publish("已正常识别 · 皮卡鱼:${resultText(result)}", State.ANALYZING, fen = boardFen, board = board, result = result)
+        publish("已正常识别 · 皮卡鱼:${resultText(result)}", State.ANALYZING, fen = boardFen, board = oriented, result = result)
 
         if (autoMoveOn && isRunning) {
-            publish("自动走子…", State.AUTO_PLAYING, fen = boardFen, board = board, result = result)
+            publish("自动走子…", State.AUTO_PLAYING, fen = boardFen, board = oriented, result = result)
             val ok = autoPlay(result.bestmove, rect)
             if (ok) {
                 lastAutoFen = boardFen
                 lastAutoAt = System.currentTimeMillis()
                 Thread.sleep(500)
-                publish("已走 ${result.bestmove}", State.AUTO_PLAYING, fen = boardFen, board = board, result = result)
+                publish("已走 ${result.bestmove}", State.AUTO_PLAYING, fen = boardFen, board = oriented, result = result)
             } else {
-                publish("自动走子失败（检查无障碍）", State.ERROR, fen = boardFen, board = board, result = result)
+                publish("自动走子失败（检查无障碍）", State.ERROR, fen = boardFen, board = oriented, result = result)
             }
         }
+    }
+
+    /** 红帅在上半区 → 黑方视角，整盘 180° 旋转，使 FEN 始终红方在底 */
+    private fun orientBoard(board: Position): Position {
+        var redKingRank = -1
+        for (r in 0 until 10) {
+            for (f in 0 until 9) {
+                if (board.pieceAt(r, f) == "wk") redKingRank = r
+            }
+        }
+        screenFlipped = redKingRank in 0..4
+        if (!screenFlipped) return board
+        val flipped = board.copy()
+        for (r in 0 until 10) {
+            for (f in 0 until 9) {
+                flipped.setPiece(r, f, board.pieceAt(9 - r, 8 - f))
+            }
+        }
+        return flipped
     }
 
     private fun boardFenWithSide(board: Position): String {
@@ -427,7 +454,8 @@ object ConnectSession {
         var toRank = 9 - match.groupValues[4].toInt()
         var fromCol = fromFile
         var toCol = toFile
-        if (sideToMove == "b") {
+        // 屏幕是黑方视角时，所有着法都要 180° 镜像到实际画面
+        if (sideToMove == "b" || screenFlipped) {
             fromRank = 9 - fromRank; fromCol = 8 - fromCol
             toRank = 9 - toRank; toCol = 8 - toCol
         }
