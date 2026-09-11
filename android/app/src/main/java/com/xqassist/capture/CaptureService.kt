@@ -26,8 +26,8 @@ import com.xqassist.MainActivity
 
 /**
  * 屏幕识别前台服务。
- * Android 14 规范：FGS(type=mediaProjection) → getMediaProjection → registerCallback → createVirtualDisplay。
- * 只有 VirtualDisplay 真正挂上，系统状态栏才会出现「屏幕已共享/正在录制」。
+ * 注意：MediaProjection 授权 Intent 只能消费一次；系统若无 extras 重启本服务，必须静默退出，
+ * 不能反复弹授权（那会导致“无限授权”）。
  */
 class CaptureService : Service() {
 
@@ -48,7 +48,12 @@ class CaptureService : Service() {
         private val frameLock = Any()
         private var latestFrame: Bitmap? = null
 
-        /** 仅在 projection 真正创建成功后为 true */
+        /** start() 时暂存，便于同进程二次确认状态 */
+        @Volatile
+        private var lastCode: Int = -1
+        @Volatile
+        private var lastData: Intent? = null
+
         @Volatile
         var isRunning = false
             private set
@@ -67,10 +72,14 @@ class CaptureService : Service() {
         }
 
         fun stop(context: Context) {
+            lastCode = -1
+            lastData = null
             context.stopService(Intent(context, CaptureService::class.java))
         }
 
         fun start(context: Context, resultCode: Int, data: Intent) {
+            lastCode = resultCode
+            lastData = data
             val i = Intent(context, CaptureService::class.java)
                 .putExtra(EXTRA_RESULT_CODE, resultCode)
                 .putExtra(EXTRA_RESULT_DATA, data)
@@ -91,7 +100,7 @@ class CaptureService : Service() {
         )
         val notif = Notification.Builder(this, CHANNEL)
             .setContentTitle("屏幕识别进行中")
-            .setContentText("请保持截屏授权，以便识别对方棋盘")
+            .setContentText("请保持截屏授权")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setContentIntent(open)
             .setOngoing(true)
@@ -106,28 +115,33 @@ class CaptureService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (projection != null && display != null) {
             isRunning = true
-            return START_STICKY
+            return START_NOT_STICKY
         }
 
-        val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, -1) ?: -1
-        val data = if (Build.VERSION.SDK_INT >= 33) {
+        var resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, -1) ?: -1
+        var data: Intent? = if (Build.VERSION.SDK_INT >= 33) {
             intent?.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
         } else {
             @Suppress("DEPRECATION")
             intent?.getParcelableExtra(EXTRA_RESULT_DATA)
         }
+        if (data == null) {
+            resultCode = lastCode
+            data = lastData
+        }
 
         if (data == null || resultCode < 0) {
-            Log.e(TAG, "capture: missing resultCode/data")
-            fail()
+            // 系统无授权数据重启：静默退出，避免“无限要权限”
+            Log.w(TAG, "capture: restart without projection token, stop quietly")
+            isRunning = false
+            stopSelf()
             return START_NOT_STICKY
         }
 
         return try {
             val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            // Android 14：必须已有 mediaProjection 前台服务（已在 onCreate startForeground）
             projection = mpm.getMediaProjection(resultCode, data)
-                ?: throw IllegalStateException("getMediaProjection returned null")
+                ?: throw IllegalStateException("getMediaProjection null")
 
             val callbackHandler = Handler(mainLooper)
             projectionCallback = object : MediaProjection.Callback() {
@@ -137,19 +151,18 @@ class CaptureService : Service() {
                     stopSelf()
                 }
             }
-            // 注册回调必须在 createVirtualDisplay 之前（Android 14 强制）
             projection!!.registerCallback(projectionCallback!!, callbackHandler)
 
             if (!startCapture(projection!!)) {
                 throw IllegalStateException("createVirtualDisplay failed")
             }
-
             isRunning = true
-            Log.i(TAG, "capture: ready display=${display != null}")
-            START_STICKY
+            Log.i(TAG, "capture: ready")
+            START_NOT_STICKY
         } catch (t: Throwable) {
             Log.e(TAG, "capture: failed", t)
-            fail()
+            isRunning = false
+            stopSelf()
             START_NOT_STICKY
         }
     }
@@ -187,28 +200,21 @@ class CaptureService : Service() {
             }
         }, imageHandler)
 
-        // AUTO_MIRROR 会让系统顶部出现「屏幕已共享」提示
         display = mp.createVirtualDisplay(
             "XiangqiCapture",
             width,
             height,
             dpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR or
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
             reader!!.surface,
             null,
             null,
         )
         if (display == null) {
-            Log.e(TAG, "capture: createVirtualDisplay returned null (${width}x${height}@$dpi)")
+            Log.e(TAG, "capture: VirtualDisplay null ${width}x${height}@$dpi")
             return false
         }
         return true
-    }
-
-    private fun fail() {
-        isRunning = false
-        stopSelf()
     }
 
     private fun bitmapFromImage(image: Image): Bitmap {

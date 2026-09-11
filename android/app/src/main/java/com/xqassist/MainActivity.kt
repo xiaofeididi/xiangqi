@@ -203,6 +203,8 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#F3F5F7"))
+            clipChildren = true
+            clipToPadding = true
         }
 
         // 主色参考 Pro象棋：teal primary #069695 / 淡底 shallowGreen
@@ -280,8 +282,12 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
         navBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(surface)
-            setPadding(dp(4), dp(2), dp(4), dp(2))
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            minimumHeight = dp(48)
+            isClickable = true
+            isFocusable = true
         }
         fun nav(label: String, action: () -> Unit): Button = Button(this).apply {
             text = label
@@ -290,40 +296,37 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             includeFontPadding = false
             setTextColor(tealDark)
             background = GradientDrawable().apply {
-                cornerRadius = dp(6).toFloat()
+                cornerRadius = dp(8).toFloat()
                 setColor(Color.parseColor("#E7F6F6"))
             }
-            layoutParams = LinearLayout.LayoutParams(0, dp(30), 1f).apply { marginEnd = dp(2) }
+            layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f).apply {
+                marginEnd = dp(3)
+            }
             setOnClickListener { action() }
         }
         navBar.addView(nav("开局") { browseFirst() })
         navBar.addView(nav("后退") { browsePrevious() })
         navBar.addView(nav("前进") { browseNext() })
         navBar.addView(nav("终局") { browseLast() })
-        navBar.layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            dp(40),
-        )
 
         board = BoardView(this).apply {
             controller = this@MainActivity.controller
             listener = { rank, file -> onBoardTap(rank, file) }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT,
-            )
             minimumWidth = 0
             minimumHeight = 0
         }
         val boardBox = FrameLayout(this).apply {
             setBackgroundColor(Color.parseColor("#F5F1E8"))
-            setPadding(dp(4), dp(2), dp(4), dp(2))
-            addView(board)
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f,
-            ).apply { weight = 1f }
+            setPadding(dp(6), dp(4), dp(6), dp(4))
+            clipToPadding = true
+            clipChildren = true
+            addView(
+                board,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
         }
 
         tabBar = LinearLayout(this).apply {
@@ -390,8 +393,8 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
-                0.30f,
-            )
+                0.32f,
+            ).apply { weight = 0.32f }
         }
         engineScroll = ScrollView(this).apply { addView(enginePage); layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f) }
         openingScroll = ScrollView(this).apply { addView(openingPage); layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f) }
@@ -400,11 +403,27 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         pages.addView(gamePage)
         pages.addView(settingsScroll)
 
-        // 导航条放在棋盘上方固定高度，避免被棋盘/页签盖住
-        root.addView(toolbar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        root.addView(navBar)
+        // body 把导航和棋盘包在一层，避免高度分配把导航压扁
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        }
+        body.addView(navBar, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ))
+        body.addView(boardBox, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            0,
+            1f,
+        ))
+
+        root.addView(toolbar, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ))
         root.addView(editPanel)
-        root.addView(boardBox)
+        root.addView(body)
         root.addView(tabBar)
         root.addView(pages)
         setContentView(root)
