@@ -9,6 +9,7 @@ import com.xqassist.engine.EngineResult
 import com.xqassist.engine.UcciEngine
 import com.xqassist.vision.BoardRect
 import com.xqassist.vision.ChessboardReader
+import com.xqassist.vision.BoardAutoDetector
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -196,13 +197,10 @@ object ConnectSession {
             return
         }
         if (!CaptureService.isRunning) {
-            publish("屏幕识别未开启，请回助手重新授权截屏", State.ERROR)
+            publish("屏幕识别未开，请回助手重新授权截屏", State.ERROR)
             return
         }
-        if (boardRect == null) {
-            publish("请先在助手内校准棋盘（点识别后的两点标定）", State.ERROR)
-            return
-        }
+        // boardRect 为空时，由 tick 自动检测（对齐 Pro 的 YOLO 自动找盘）
         pendingFen = ""
         pendingHits = 0
         lastAutoFen = ""
@@ -210,7 +208,7 @@ object ConnectSession {
         lastRecognizedSummary = ""
         isRunning = true
         loopJob = scope.launch {
-            publish("连线分析已启动")
+            publish("连线分析已启动" + if (boardRect == null) "，自动找棋盘…" else "")
             while (isActive && isRunning) {
                 tick()
                 delay(intervalMs.toLong())
@@ -299,13 +297,11 @@ object ConnectSession {
     private suspend fun tick() {
         val eng = engine
         val rd = reader
-        val rect = boardRect
-        if (eng?.isReady != true || rd == null || rect == null) {
+        if (eng?.isReady != true || rd == null) {
             publish(
                 when {
                     eng?.isReady != true -> "引擎未就绪"
-                    rd == null -> "识别器未就绪"
-                    else -> "请先标定棋盘范围"
+                    else -> "识别器未就绪"
                 },
                 State.WAITING_PERMISSION,
             )
@@ -326,6 +322,22 @@ object ConnectSession {
         if (frame == null) {
             publish("等待截屏画面…", State.WAITING_FRAME)
             return
+        }
+
+        // boardRect 为空 → 自动检测（Pro 用 YOLO，我们用颜色）
+        var rect = boardRect
+        if (rect == null) {
+            publish("自动找棋盘中…", State.RECOGNIZING)
+            val detected = withContext(Dispatchers.IO) { BoardAutoDetector.detect(frame) }
+            if (detected != null) {
+                boardRect = detected
+                rect = detected
+                appContext?.let { savePrefs(it) }
+                publish("已自动找到棋盘 ${detected.right - detected.left}×${detected.bottom - detected.top}", State.RECOGNIZING)
+            } else {
+                publish("未找到棋盘，请手动校准", State.ERROR)
+                return
+            }
         }
 
         publish("识别中…", State.RECOGNIZING)
