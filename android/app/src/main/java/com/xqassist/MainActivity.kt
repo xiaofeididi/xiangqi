@@ -16,6 +16,7 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.CompoundButton
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -299,17 +300,30 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         navBar.addView(nav("后退") { browsePrevious() })
         navBar.addView(nav("前进") { browseNext() })
         navBar.addView(nav("终局") { browseLast() })
-        navBar.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36))
+        navBar.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            dp(40),
+        )
 
         board = BoardView(this).apply {
             controller = this@MainActivity.controller
             listener = { rank, file -> onBoardTap(rank, file) }
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f).apply {
-                topMargin = dp(2)
-                bottomMargin = dp(2)
-                marginStart = dp(4)
-                marginEnd = dp(4)
-            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+            minimumWidth = 0
+            minimumHeight = 0
+        }
+        val boardBox = FrameLayout(this).apply {
+            setBackgroundColor(Color.parseColor("#F5F1E8"))
+            setPadding(dp(4), dp(2), dp(4), dp(2))
+            addView(board)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1f,
+            ).apply { weight = 1f }
         }
 
         tabBar = LinearLayout(this).apply {
@@ -373,7 +387,11 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         pages = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#F3F5F7"))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.34f)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                0.30f,
+            )
         }
         engineScroll = ScrollView(this).apply { addView(enginePage); layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f) }
         openingScroll = ScrollView(this).apply { addView(openingPage); layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f) }
@@ -382,10 +400,11 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         pages.addView(gamePage)
         pages.addView(settingsScroll)
 
+        // 导航条放在棋盘上方固定高度，避免被棋盘/页签盖住
         root.addView(toolbar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        root.addView(board)
-        root.addView(editPanel)
         root.addView(navBar)
+        root.addView(editPanel)
+        root.addView(boardBox)
         root.addView(tabBar)
         root.addView(pages)
         setContentView(root)
@@ -1646,7 +1665,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         LiveLinkService.isConnected
 
     private fun hasCapturePermission(): Boolean =
-        CaptureService.isRunning
+        CaptureService.isRunning && CaptureService.latestBitmap() != null
 
     private fun permissionChecklist(): String = buildString {
         append(if (hasOverlayPermission()) "✔" else "✘")
@@ -1669,42 +1688,50 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         ensurePermissionsThenOverlay()
     }
 
+    /** 所有入口共用：先弹三项校验清单，全✔才真正开悬浮窗 */
     private fun ensurePermissionsThenOverlay() {
-        if (!hasOverlayPermission()) {
-            Toast.makeText(this, "请先允许悬浮窗权限", Toast.LENGTH_SHORT).show()
-            startActivity(
-                android.content.Intent(
-                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    android.net.Uri.parse("package:$packageName"),
-                ),
-            )
+        val overlayOk = hasOverlayPermission()
+        val a11yOk = hasAccessibilityPermission()
+        val captureOk = hasCapturePermission()
+
+        if (overlayOk && a11yOk && captureOk) {
+            OverlayService.start(this)
+            overlayOn = true
+            Toast.makeText(this, "悬浮窗已开启", Toast.LENGTH_SHORT).show()
+            updateOverlayState()
             return
         }
-        if (!hasAccessibilityPermission()) {
-            android.app.AlertDialog.Builder(this)
-                .setTitle("需要无障碍权限")
-                .setMessage("请在系统设置里开启「象棋助手」无障碍服务，再回到本应用点「悬浮」。\n\n当前状态：\n${permissionChecklist()}")
-                .setPositiveButton("去开启") { _, _ ->
-                    startActivity(android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+
+        val missing = buildString {
+            if (!overlayOk) append("· 悬浮窗权限：去系统允许显示在其他应用上层\n")
+            if (!a11yOk) append("· 无障碍：设置 → 无障碍 → 已安装的服务 → 象棋助手\n")
+            if (!captureOk) append("· 屏幕识别：允许本应用截屏/录制\n")
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("开启悬浮窗前需要 3 项权限")
+            .setMessage("${permissionChecklist()}\n\n未完成：\n$missing")
+            .setPositiveButton("去补全") { _, _ ->
+                when {
+                    !overlayOk -> startActivity(
+                        android.content.Intent(
+                            android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            android.net.Uri.parse("package:$packageName"),
+                        ),
+                    )
+                    !a11yOk -> startActivity(
+                        android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS),
+                    )
+                    else -> {
+                        try {
+                            capturePermissionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+                        } catch (e: Throwable) {
+                            Toast.makeText(this, "截屏授权失败：${e.message}", Toast.LENGTH_LONG).show()
+                        }
+                    }
                 }
-                .setNegativeButton("取消", null)
-                .show()
-            return
-        }
-        if (!hasCapturePermission()) {
-            Toast.makeText(this, "请允许屏幕识别（截屏）后继续", Toast.LENGTH_SHORT).show()
-            try {
-                capturePermissionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
-            } catch (e: Throwable) {
-                android.util.Log.e("Capture", "permission launch failed", e)
-                Toast.makeText(this, "截屏授权失败：${e.message}", Toast.LENGTH_LONG).show()
             }
-            return
-        }
-        OverlayService.start(this)
-        overlayOn = true
-        Toast.makeText(this, "悬浮窗已开启", Toast.LENGTH_SHORT).show()
-        updateOverlayState()
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private fun updateOverlayState() {

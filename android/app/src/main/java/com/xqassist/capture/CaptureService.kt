@@ -1,27 +1,34 @@
 package com.xqassist.capture
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.Image
 import android.media.ImageReader
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.Service
-import android.content.Context
-import android.content.Intent
-import android.content.pm.ServiceInfo
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
-import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import android.view.WindowManager
+import com.xqassist.MainActivity
 
-/** Foreground service that owns the MediaProjection and turns frames into bitmaps. */
+/**
+ * 屏幕识别前台服务。
+ * Android 14 规范：FGS(type=mediaProjection) → getMediaProjection → registerCallback → createVirtualDisplay。
+ * 只有 VirtualDisplay 真正挂上，系统状态栏才会出现「屏幕已共享/正在录制」。
+ */
 class CaptureService : Service() {
 
     private var projection: MediaProjection? = null
@@ -29,6 +36,7 @@ class CaptureService : Service() {
     private var display: VirtualDisplay? = null
     private var imageThread: HandlerThread? = null
     private var imageHandler: Handler? = null
+    private var projectionCallback: MediaProjection.Callback? = null
 
     companion object {
         private const val CHANNEL = "xq_capture"
@@ -40,6 +48,7 @@ class CaptureService : Service() {
         private val frameLock = Any()
         private var latestFrame: Bitmap? = null
 
+        /** 仅在 projection 真正创建成功后为 true */
         @Volatile
         var isRunning = false
             private set
@@ -50,7 +59,11 @@ class CaptureService : Service() {
         @JvmStatic
         fun copyLatestBitmap(): Bitmap? {
             val source = synchronized(frameLock) { latestFrame } ?: return null
-            return source.copy(source.config ?: Bitmap.Config.ARGB_8888, false)
+            return try {
+                source.copy(source.config ?: Bitmap.Config.ARGB_8888, false)
+            } catch (_: Throwable) {
+                null
+            }
         }
 
         fun stop(context: Context) {
@@ -58,8 +71,6 @@ class CaptureService : Service() {
         }
 
         fun start(context: Context, resultCode: Int, data: Intent) {
-            // 先标记运行中，避免 startForegroundService 异步导致外部立刻判定未授权
-            isRunning = true
             val i = Intent(context, CaptureService::class.java)
                 .putExtra(EXTRA_RESULT_CODE, resultCode)
                 .putExtra(EXTRA_RESULT_DATA, data)
@@ -72,10 +83,18 @@ class CaptureService : Service() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val ch = NotificationChannel(CHANNEL, "屏幕识别", NotificationManager.IMPORTANCE_LOW)
         nm.createNotificationChannel(ch)
+        val open = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
         val notif = Notification.Builder(this, CHANNEL)
-            .setContentTitle("屏幕识别")
-            .setContentText("正在识别棋盘…")
+            .setContentTitle("屏幕识别进行中")
+            .setContentText("请保持截屏授权，以便识别对方棋盘")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setContentIntent(open)
+            .setOngoing(true)
             .build()
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
@@ -85,48 +104,76 @@ class CaptureService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (projection != null) {
+        if (projection != null && display != null) {
             isRunning = true
             return START_STICKY
         }
+
         val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, -1) ?: -1
-        val data = if (Build.VERSION.SDK_INT >= 33) intent?.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
-                   else @Suppress("DEPRECATION") intent?.getParcelableExtra(EXTRA_RESULT_DATA)
+        val data = if (Build.VERSION.SDK_INT >= 33) {
+            intent?.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent?.getParcelableExtra(EXTRA_RESULT_DATA)
+        }
+
         if (data == null || resultCode < 0) {
-            isRunning = false
-            stopSelf()
+            Log.e(TAG, "capture: missing resultCode/data")
+            fail()
             return START_NOT_STICKY
         }
 
         return try {
             val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            // Android 14：必须已有 mediaProjection 前台服务（已在 onCreate startForeground）
             projection = mpm.getMediaProjection(resultCode, data)
-            startCapture()
+                ?: throw IllegalStateException("getMediaProjection returned null")
+
+            val callbackHandler = Handler(mainLooper)
+            projectionCallback = object : MediaProjection.Callback() {
+                override fun onStart() {
+                    Log.i(TAG, "capture: projection onStart（系统应显示屏幕已共享）")
+                    isRunning = true
+                }
+
+                override fun onStop() {
+                    Log.i(TAG, "capture: projection onStop")
+                    isRunning = false
+                    stopSelf()
+                }
+            }
+            // 注册回调必须在 createVirtualDisplay 之前（Android 14 强制）
+            projection!!.registerCallback(projectionCallback!!, callbackHandler)
+
+            if (!startCapture(projection!!)) {
+                throw IllegalStateException("createVirtualDisplay failed")
+            }
+
             isRunning = true
-            Log.i(TAG, "capture: projection ready")
+            Log.i(TAG, "capture: ready display=${display != null}")
             START_STICKY
-        } catch (e: Throwable) {
-            Log.e(TAG, "capture: projection failed", e)
-            isRunning = false
-            stopSelf()
+        } catch (t: Throwable) {
+            Log.e(TAG, "capture: failed", t)
+            fail()
             START_NOT_STICKY
         }
     }
 
-    private fun startCapture() {
-        val metrics = resources.displayMetrics
+    private fun startCapture(mp: MediaProjection): Boolean {
+        val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val metrics = android.util.DisplayMetrics()
+        @Suppress("DEPRECATION")
+        wm.defaultDisplay.getRealMetrics(metrics)
         val width = metrics.widthPixels.coerceAtLeast(1)
         val height = metrics.heightPixels.coerceAtLeast(1)
+        val dpi = metrics.densityDpi.takeIf { it > 0 } ?: resources.displayMetrics.densityDpi
+
+        imageThread?.quitSafely()
         imageThread = HandlerThread("xq-capture").apply { start() }
         imageHandler = Handler(imageThread!!.looper)
-        reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3)
-        projection!!.registerCallback(object : MediaProjection.Callback() {
-            override fun onStop() {
-                Log.i(TAG, "capture: projection stopped")
-                isRunning = false
-                stopSelf()
-            }
-        }, imageHandler)
+
+        reader?.close()
+        reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
         reader!!.setOnImageAvailableListener({ activeReader ->
             var image: Image? = null
             try {
@@ -134,6 +181,7 @@ class CaptureService : Service() {
                 if (image != null) {
                     val converted = bitmapFromImage(image)
                     synchronized(frameLock) {
+                        latestFrame?.recycle()
                         latestFrame = converted
                     }
                 }
@@ -144,16 +192,28 @@ class CaptureService : Service() {
             }
         }, imageHandler)
 
-        display = projection!!.createVirtualDisplay(
+        // AUTO_MIRROR 会让系统顶部出现「屏幕已共享」提示
+        display = mp.createVirtualDisplay(
             "XiangqiCapture",
             width,
             height,
-            metrics.densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            dpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR or
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC,
             reader!!.surface,
             null,
-            imageHandler,
+            null,
         )
+        if (display == null) {
+            Log.e(TAG, "capture: createVirtualDisplay returned null (${width}x${height}@$dpi)")
+            return false
+        }
+        return true
+    }
+
+    private fun fail() {
+        isRunning = false
+        stopSelf()
     }
 
     private fun bitmapFromImage(image: Image): Bitmap {
@@ -189,16 +249,26 @@ class CaptureService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        try {
+            projectionCallback?.let { projection?.unregisterCallback(it) }
+        } catch (_: Throwable) {
+        }
         display?.release()
         display = null
         reader?.close()
         reader = null
-        projection?.stop()
+        try {
+            projection?.stop()
+        } catch (_: Throwable) {
+        }
         projection = null
         imageThread?.quitSafely()
         imageThread = null
         imageHandler = null
-        synchronized(frameLock) { latestFrame = null }
+        synchronized(frameLock) {
+            latestFrame?.recycle()
+            latestFrame = null
+        }
         super.onDestroy()
     }
 
