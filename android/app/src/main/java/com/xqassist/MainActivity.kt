@@ -202,6 +202,10 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         OverlayService.actions = this
         controller = GameController()
         ConnectSession.attach(this)
+        // 无障碍连上/断开时立刻刷新悬浮窗按钮文案
+        LiveLinkService.onConnectedChanged = {
+            runOnUiThread { updateOverlayState() }
+        }
         capturedBoardRect = ConnectSession.boardRect
         capturedBoardFlipped = ConnectSession.flipped
         flipped = ConnectSession.flipped
@@ -211,6 +215,13 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
         buildUi()
         refreshUi()
         startEngine()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 从系统设置返回后刷新无障碍/截屏状态
+        updateOverlayState()
+        renderInfo()
     }
 
     private fun onConnectSnapshot(snap: ConnectSession.Snapshot) {
@@ -1532,8 +1543,8 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
     override fun onLink() {
         runOnUiThread {
-            // 不要把用户从天天象棋拉回助手
-            if (LiveLinkService.isConnected) {
+            val connected = LiveLinkService.isConnected
+            if (connected) {
                 LiveLinkService.disconnect()
                 toastOverlay("连线已断开")
             } else {
@@ -1544,6 +1555,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                     android.util.Log.w("Main", "open a11y failed", t)
                 }
             }
+            // 立刻按当前状态刷按钮
             updateOverlayState()
         }
     }

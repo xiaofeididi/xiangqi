@@ -18,6 +18,10 @@ class LiveLinkService : AccessibilityService() {
         val isConnected: Boolean get() = instance != null
         private const val TAG = "LiveLink"
 
+        /** 无障碍连接状态变化时回调（用于刷新悬浮窗按钮文案） */
+        @Volatile
+        var onConnectedChanged: (() -> Unit)? = null
+
         /** 在当前前台窗口的 (x,y) 处模拟点击 */
         fun tapAt(x: Int, y: Int, done: (Boolean) -> Unit = {}): Boolean {
             val svc = instance ?: run { done(false); return false }
@@ -64,6 +68,11 @@ class LiveLinkService : AccessibilityService() {
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
         }
         Log.i(TAG, "llink: connected")
+        try {
+            onConnectedChanged?.invoke()
+        } catch (t: Throwable) {
+            Log.w(TAG, "onConnectedChanged", t)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -75,6 +84,11 @@ class LiveLinkService : AccessibilityService() {
 
     override fun onDestroy() {
         instance = null
+        try {
+            onConnectedChanged?.invoke()
+        } catch (t: Throwable) {
+            Log.w(TAG, "onConnectedChanged destroy", t)
+        }
         super.onDestroy()
     }
 
