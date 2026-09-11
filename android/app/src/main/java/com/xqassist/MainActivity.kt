@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import android.text.InputType
@@ -67,6 +68,7 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     private lateinit var analysisButton: Button
     private lateinit var engineRedButton: Button
     private lateinit var engineBlackButton: Button
+    private lateinit var statusStrip: TextView
 
     private var engine: UcciEngine? = null
     private val engineMutex = Mutex()
@@ -194,68 +196,112 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#F5F1E8"))
+            setBackgroundColor(Color.parseColor("#F3F5F7"))
         }
+
+        // 主色参考 Pro象棋：teal primary #069695 / 淡底 shallowGreen
+        val teal = Color.parseColor("#069695")
+        val tealDark = Color.parseColor("#047A79")
+        val surface = Color.parseColor("#FFFFFF")
+        val ink = Color.parseColor("#1F2933")
+        val muted = Color.parseColor("#6B7785")
 
         val toolbar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#FDFBF7"))
-            setPadding(dp(6), dp(4), dp(6), dp(4))
+            setBackgroundColor(surface)
+            setPadding(dp(6), dp(4), dp(6), dp(6))
+            elevation = dp(2).toFloat()
         }
-        fun tool(label: String, action: () -> Unit): Button = Button(this).apply {
+        fun tool(label: String, action: () -> Unit, accent: Boolean = false): Button = Button(this).apply {
             text = label
-            textSize = 13f
+            textSize = 12f
             isAllCaps = false
-            setPadding(0, 0, 0, 0)
-            setBackgroundColor(Color.parseColor("#FFFFFF"))
-            layoutParams = LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginEnd = dp(2) }
+            includeFontPadding = false
+            setPadding(dp(2), 0, dp(2), 0)
+            setTextColor(if (accent) Color.WHITE else ink)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(if (accent) teal else Color.parseColor("#EEF2F5"))
+            }
+            layoutParams = LinearLayout.LayoutParams(0, dp(34), 1f).apply {
+                marginEnd = dp(3)
+            }
             setOnClickListener { action() }
         }
-        val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        statusStrip = TextView(this).apply {
+            text = statusMessage
+            textSize = 11f
+            setTextColor(muted)
+            maxLines = 2
+            setPadding(dp(2), dp(3), dp(2), 0)
+        }
+        val row1 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
         row1.addView(tool("菜单") { menuDialog() })
         row1.addView(tool("新局") { newGame() })
         row1.addView(tool("编辑") { editDialog() })
-        row1.addView(tool("屏幕识别") { startScreenRecognition() })
-        row1.addView(tool("悬浮窗") { toggleOverlay() })
-        val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        engineRedButton = tool("引擎执红") { setEngineSide("w") }
-        engineBlackButton = tool("引擎执黑") { setEngineSide("b") }
-        analysisButton = tool("分析模式") { toggleAnalysisMode() }
+        row1.addView(tool("识别") { startScreenRecognition() })
+        row1.addView(tool("悬浮") { toggleOverlay() })
+        val row2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(3)
+            }
+        }
+        engineRedButton = tool("执红") { setEngineSide("w") }
+        engineBlackButton = tool("执黑") { setEngineSide("b") }
+        analysisButton = tool("分析") { toggleAnalysisMode() }
         row2.addView(engineRedButton)
         row2.addView(engineBlackButton)
         row2.addView(analysisButton)
-        row2.addView(tool("立即出招") { playBestNow() })
+        row2.addView(tool("出招") { playBestNow() })
         row2.addView(tool("换招") { forceChangeMove() })
         toolbar.addView(row1)
         toolbar.addView(row2)
+        toolbar.addView(statusStrip)
 
         navBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Color.parseColor("#FDFBF7"))
+            setBackgroundColor(surface)
+            setPadding(dp(4), dp(2), dp(4), dp(2))
         }
         fun nav(label: String, action: () -> Unit): Button = Button(this).apply {
             text = label
-            textSize = 15f
-            setPadding(0, 0, 0, 0)
-            setBackgroundColor(Color.parseColor("#FDFBF7"))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            textSize = 13f
+            isAllCaps = false
+            includeFontPadding = false
+            setTextColor(tealDark)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(6).toFloat()
+                setColor(Color.parseColor("#E7F6F6"))
+            }
+            layoutParams = LinearLayout.LayoutParams(0, dp(30), 1f).apply { marginEnd = dp(2) }
             setOnClickListener { action() }
         }
         navBar.addView(nav("开局") { browseFirst() })
         navBar.addView(nav("后退") { browsePrevious() })
         navBar.addView(nav("前进") { browseNext() })
         navBar.addView(nav("终局") { browseLast() })
-        navBar.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(34))
+        navBar.addView(nav("悔棋") { undo() })
+        navBar.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
         board = BoardView(this).apply {
             controller = this@MainActivity.controller
             listener = { rank, file -> onBoardTap(rank, file) }
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.96f)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.15f).apply {
+                topMargin = dp(4)
+                bottomMargin = dp(4)
+                marginStart = dp(4)
+                marginEnd = dp(4)
+            }
         }
 
         tabBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Color.parseColor("#F1ECE2"))
+            setBackgroundColor(surface)
+            setPadding(dp(4), 0, dp(4), 0)
         }
         engineTab = tabButton("引擎") { switchTab(TAB_ENGINE) }
         openingTab = tabButton("开局库") { switchTab(TAB_OPENING) }
@@ -282,34 +328,9 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
             setPadding(dp(10), dp(6), dp(10), dp(10))
         }
         movesListContainer = movesList
-        val gameNav = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setBackgroundColor(Color.parseColor("#F4EFE6"))
-            setPadding(dp(6), dp(4), dp(6), dp(4))
-        }
-        val nav = listOf("⇤" to { browseFirst() }, "‹" to { browsePrevious() }, "›" to { browseNext() }, "⇥" to { browseLast() }, "♻" to { undo() })
-        nav.forEach { item ->
-            val label = item.first
-            val action = item.second
-            val b = TextView(this).apply {
-                text = label
-                textSize = 18f
-                setTextColor(Color.parseColor("#333333"))
-                gravity = Gravity.CENTER
-                setBackgroundColor(Color.parseColor("#FFFFFF"))
-                setPadding(dp(12), dp(4), dp(12), dp(4))
-                val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                lp.marginEnd = dp(6)
-                layoutParams = lp
-                setOnClickListener { action(); }
-            }
-            gameNav.addView(b)
-        }
         gamePage = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#FBF9F4"))
-            addView(gameNav, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(ScrollView(this@MainActivity).apply { addView(movesList) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }
         settingsPage = LinearLayout(this).apply {
@@ -337,7 +358,8 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
 
         pages = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.38f)
+            setBackgroundColor(Color.parseColor("#F3F5F7"))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.42f)
         }
         engineScroll = ScrollView(this).apply { addView(enginePage); layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f) }
         openingScroll = ScrollView(this).apply { addView(openingPage); layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f) }
@@ -514,20 +536,32 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     private fun tabButton(label: String, action: () -> Unit): Button = Button(this).apply {
         text = label
         isAllCaps = false
-        textSize = 15f
-        setPadding(0, 0, 0, 0)
+        includeFontPadding = false
+        textSize = 14f
+        setPadding(0, dpToPx(8), 0, dpToPx(8))
         layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         setOnClickListener { action() }
     }
 
     private fun switchTab(tab: Int) {
         bottomTab = tab
-        val active = Color.parseColor("#FFFFFF")
-        val inactive = Color.parseColor("#F0F0F0")
-        engineTab.setBackgroundColor(if (tab == TAB_ENGINE) active else inactive)
-        openingTab.setBackgroundColor(if (tab == TAB_OPENING) active else inactive)
-        gameTab.setBackgroundColor(if (tab == TAB_GAME) active else inactive)
-        settingsTab.setBackgroundColor(if (tab == TAB_SETTINGS) active else inactive)
+        val teal = Color.parseColor("#069695")
+        val on = Color.parseColor("#E7F6F6")
+        val off = Color.parseColor("#FFFFFF")
+        val buttons = listOf(
+            TAB_ENGINE to engineTab,
+            TAB_OPENING to openingTab,
+            TAB_GAME to gameTab,
+            TAB_SETTINGS to settingsTab,
+        )
+        buttons.forEach { (id, button) ->
+            val active = id == tab
+            button.setTextColor(if (active) teal else Color.parseColor("#5B6672"))
+            button.background = GradientDrawable().apply {
+                cornerRadius = 8f * resources.displayMetrics.density
+                setColor(if (active) on else off)
+            }
+        }
         engineScroll.visibility = if (tab == TAB_ENGINE) View.VISIBLE else View.GONE
         openingScroll.visibility = if (tab == TAB_OPENING) View.VISIBLE else View.GONE
         gamePage.visibility = if (tab == TAB_GAME) View.VISIBLE else View.GONE
@@ -775,14 +809,23 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
     }
 
     private fun updateToolStates() {
-        val on = Color.parseColor("#C8E6C9")
-        val off = Color.parseColor("#F5F5F5")
-        if (::engineRedButton.isInitialized) engineRedButton.setBackgroundColor(if ("w" in engineSides) on else off)
-        if (::engineBlackButton.isInitialized) engineBlackButton.setBackgroundColor(if ("b" in engineSides) on else off)
-        if (::analysisButton.isInitialized) analysisButton.setBackgroundColor(if (analysisMode) on else off)
+        val teal = Color.parseColor("#069695")
+        val on = Color.parseColor("#C8F0EE")
+        val off = Color.parseColor("#EEF2F5")
+        fun paint(button: Button, active: Boolean) {
+            button.setTextColor(if (active) teal else Color.parseColor("#1F2933"))
+            button.background = GradientDrawable().apply {
+                cornerRadius = 8f * resources.displayMetrics.density
+                setColor(if (active) on else off)
+            }
+        }
+        if (::engineRedButton.isInitialized) paint(engineRedButton, "w" in engineSides)
+        if (::engineBlackButton.isInitialized) paint(engineBlackButton, "b" in engineSides)
+        if (::analysisButton.isInitialized) paint(analysisButton, analysisMode || ConnectSession.isRunning)
     }
 
     private fun renderInfo() {
+        if (::statusStrip.isInitialized) statusStrip.text = statusMessage
         updateToolStates()
         updateOverlayState()
         if (bottomTab == TAB_ENGINE) renderEnginePage()
