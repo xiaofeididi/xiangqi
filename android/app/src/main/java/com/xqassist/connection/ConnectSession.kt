@@ -183,10 +183,12 @@ object ConnectSession {
             return
         }
         if (!CaptureService.isRunning) {
-            publish("请先开启屏幕识别授权", State.WAITING_PERMISSION)
+            publish("屏幕识别未开启，请回助手重新授权截屏", State.ERROR)
+            return
         }
         if (boardRect == null) {
-            publish("请先标定棋盘范围", State.WAITING_PERMISSION)
+            publish("请先在助手内校准棋盘（点识别后的两点标定）", State.ERROR)
+            return
         }
         pendingFen = ""
         pendingHits = 0
@@ -253,7 +255,7 @@ object ConnectSession {
             return
         }
         if (!CaptureService.isRunning) {
-            publish("屏幕识别未授权", State.WAITING_PERMISSION)
+            publish("屏幕识别已断开，请回助手点悬浮重新授权", State.ERROR)
             return
         }
 

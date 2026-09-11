@@ -1569,20 +1569,25 @@ class MainActivity : AppCompatActivity(), OverlayService.Actions {
                 analysisMode = false
                 statusMessage = "连线分析已停止"
             } else {
-                // 连线模式下让开本地持续分析，避免抢引擎
                 analysisMode = false
                 analysisJob?.cancel()
                 analysisJob = null
+                if (!CaptureService.isRunning) {
+                    bringToFront()
+                    Toast.makeText(this, "屏幕识别已断开，请重新授权截屏", Toast.LENGTH_LONG).show()
+                    ensurePermissionsThenOverlay()
+                    return
+                }
+                if (ConnectSession.boardRect == null) {
+                    bringToFront()
+                    Toast.makeText(this, "请先校准棋盘（识别→点左上/右下）", Toast.LENGTH_LONG).show()
+                    startScreenRecognition()
+                    return
+                }
                 ConnectSession.start(engine, if (visionMode == TemplatePieceReader.MODE_WIDE) wideReader else basicReader)
                 statusMessage = "连线分析已启动"
                 if (!LiveLinkService.isConnected) {
-                    Toast.makeText(this, "无障碍未开：仅分析，无法自动走子", Toast.LENGTH_SHORT).show()
-                }
-                if (!CaptureService.isRunning) {
-                    Toast.makeText(this, "截屏未授权：请先点识别授权", Toast.LENGTH_SHORT).show()
-                }
-                if (ConnectSession.boardRect == null) {
-                    Toast.makeText(this, "未校准棋盘：请先点校准", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "无障碍未开：无法自动走子", Toast.LENGTH_SHORT).show()
                 }
             }
             renderInfo()
