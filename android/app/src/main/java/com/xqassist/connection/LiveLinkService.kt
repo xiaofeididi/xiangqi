@@ -22,8 +22,9 @@ class LiveLinkService : AccessibilityService() {
         fun tapAt(x: Int, y: Int, done: (Boolean) -> Unit = {}): Boolean {
             val svc = instance ?: run { done(false); return false }
             val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
+            // 与 Pro象棋一致：约 20ms 短按
             val gesture = GestureDescription.Builder()
-                .addStroke(GestureDescription.StrokeDescription(path, 0, 60))
+                .addStroke(GestureDescription.StrokeDescription(path, 0, 20))
                 .build()
             return svc.dispatchGesture(gesture, object : GestureResultCallback() {
                 override fun onCompleted(gestureDescription: GestureDescription?) = done(true)

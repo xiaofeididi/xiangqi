@@ -9,7 +9,6 @@ import com.xqassist.engine.EngineResult
 import com.xqassist.engine.UcciEngine
 import com.xqassist.vision.BoardRect
 import com.xqassist.vision.ChessboardReader
-import com.xqassist.vision.GridGeometry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -355,23 +354,52 @@ object ConnectSession {
         return parts.joinToString(" ")
     }
 
+    /**
+     * 按 Pro象棋 FloatingWindowService.touchMove 的坐标方案点子：
+     * width=rect.w/10, height=rect.h/11；
+     * x = centerX - (4-file)*width；
+     * rank<=4: y=top+height+rank*height，否则 y=bottom-height-(9-rank)*height；
+     * 黑方走子时对 rank/file 做镜像；先点起点，再 150ms，后点终点。
+     */
     private fun autoPlay(iccs: String, rect: BoardRect): Boolean {
         if (!LiveLinkService.isConnected) return false
         val match = Regex("([a-i])([0-9])([a-i])([0-9])").matchEntentOrNull(iccs) ?: return false
         val fromFile = Position.FILE_NAMES.indexOf(match.first)
-        val fromIccsRank = match.second
         val toFile = Position.FILE_NAMES.indexOf(match.third)
-        val toIccsRank = match.fourth
         if (fromFile < 0 || toFile < 0) return false
-        val fromRank = 9 - fromIccsRank
-        val toRank = 9 - toIccsRank
-        val (fx, fy) = GridGeometry.intersection(rect, fromRank, fromFile)
-        val (tx, ty) = GridGeometry.intersection(rect, toRank, toFile)
+        var fromRank = 9 - match.second
+        var toRank = 9 - match.fourth
+        var fromCol = fromFile
+        var toCol = toFile
+        if (sideToMove == "b") {
+            fromRank = 9 - fromRank
+            fromCol = 8 - fromCol
+            toRank = 9 - toRank
+            toCol = 8 - toCol
+        }
+        val fx = proScreenX(rect, fromCol)
+        val fy = proScreenY(rect, fromRank)
+        val tx = proScreenX(rect, toCol)
+        val ty = proScreenY(rect, toRank)
         val tappedFrom = LiveLinkService.tapAtSync(fx, fy)
         if (!tappedFrom) return false
-        Thread.sleep(120)
-        val tappedTo = LiveLinkService.tapAtSync(tx, ty)
-        return tappedTo
+        Thread.sleep(150)
+        return LiveLinkService.tapAtSync(tx, ty)
+    }
+
+    private fun proScreenX(rect: BoardRect, file: Int): Int {
+        val width = ((rect.right - rect.left) / 10).coerceAtLeast(1)
+        val centerX = (rect.left + rect.right) / 2
+        return centerX - ((4 - file) * width)
+    }
+
+    private fun proScreenY(rect: BoardRect, rank: Int): Int {
+        val height = ((rect.bottom - rect.top) / 11).coerceAtLeast(1)
+        return if (rank <= 4) {
+            rect.top + height + rank * height
+        } else {
+            rect.bottom - height - ((9 - rank) * height)
+        }
     }
 
     private fun Regex.matchEntentOrNull(input: String): IccsParts? {
