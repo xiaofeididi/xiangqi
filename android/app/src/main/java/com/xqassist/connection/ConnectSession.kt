@@ -2,14 +2,15 @@ package com.xqassist.connection
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.graphics.Bitmap
+import android.util.Log
 import com.xqassist.capture.CaptureService
 import com.xqassist.core.Position
 import com.xqassist.engine.EngineResult
 import com.xqassist.engine.UcciEngine
+import com.xqassist.overlay.OverlayService
+import com.xqassist.vision.BoardAutoDetector
 import com.xqassist.vision.BoardRect
 import com.xqassist.vision.ChessboardReader
-import com.xqassist.vision.BoardAutoDetector
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -20,50 +21,32 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 连线分析会话：截屏 → 识盘 → 引擎分析 → 悬浮展示 → 可选无障碍点子。
- * 不绑定 Activity 生命周期，悬浮窗可在主界面后台时继续跑。
+ * 连线分析会话（对齐 Pro FloatingWindowService 的识别线程）。
+ * 不依赖 Activity：引擎/识别器由 OverlayService 注入，状态直接刷到悬浮窗。
  */
 object ConnectSession {
 
-    enum class State {
-        IDLE, WAITING_PERMISSION, WAITING_FRAME, RECOGNIZING, ANALYZING, AUTO_PLAYING, PAUSED, ERROR
-    }
+    private const val TAG = "Connect"
 
-    data class Snapshot(
-        val state: State = State.IDLE,
-        val message: String = "",
-        val fen: String = "",
-        val board: Position? = null,
-        val recognizeMs: Long = 0,
-        val result: EngineResult = EngineResult(),
-        val autoMove: Boolean = false,
-        val delayMs: Int = 1200,
-        val sideToMove: String = "w",
-        val running: Boolean = false,
-    )
+    enum class State {
+        IDLE, WAITING_FRAME, RECOGNIZING, ANALYZING, AUTO_PLAYING, PAUSED, ERROR
+    }
 
     @Volatile
     var boardRect: BoardRect? = null
         private set
 
     @Volatile
-    var flipped: Boolean = false
-        private set
+    var sideToMove: String = "w"
 
     @Volatile
     var autoMoveOn: Boolean = false
 
-    /** 识盘间隔（非 Pro 点子间隔） */
     @Volatile
     var intervalMs: Int = 1200
 
-    /** 起点→终点点按间隔：Pro 默认 150ms；慢动画可调到 800ms */
     @Volatile
     var tapGapMs: Int = 150
-
-    /** 识别结果里写入的行棋方（外部棋盘侧向无法可靠识别时由用户配置） */
-    @Volatile
-    var sideToMove: String = "w"
 
     @Volatile
     var thinkMs: Int = 3000
@@ -71,27 +54,11 @@ object ConnectSession {
     @Volatile
     var searchDepth: Int = 0
 
-    /** true = 出子模式，使用 thinkMs/searchDepth；false = 纯分析，不套用深度/时间设置 */
     @Volatile
     var useEngineLimits: Boolean = false
 
     @Volatile
-    var multiPv: Int = 1
-
-    @Volatile
-    var visionWide: Boolean = false
-
-    @Volatile
     var isRunning: Boolean = false
-        private set
-
-    /** 最近一次识别是否成功（稳定局面） */
-    @Volatile
-    var lastRecognizedOk: Boolean = false
-        private set
-
-    @Volatile
-    var lastRecognizedSummary: String = ""
         private set
 
     @Volatile
@@ -111,10 +78,15 @@ object ConnectSession {
         private set
 
     @Volatile
-    var lastState: State = State.IDLE
+    var lastRecognizedOk: Boolean = false
         private set
 
-    var onSnapshot: ((Snapshot) -> Unit)? = null
+    @Volatile
+    var lastRecognizedSummary: String = ""
+        private set
+
+    /** 主界面可选监听（本地棋盘跟随）；悬浮窗由 publish 直接刷新 */
+    var onSnapshot: ((State, String, String, EngineResult) -> Unit)? = null
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var loopJob: Job? = null
@@ -122,55 +94,47 @@ object ConnectSession {
     private var reader: ChessboardReader? = null
     private var appContext: Context? = null
 
-    private const val PREFS = "connect_session"
-    private const val KEY_LEFT = "rect_left"
-    private const val KEY_TOP = "rect_top"
-    private const val KEY_RIGHT = "rect_right"
-    private const val KEY_BOTTOM = "rect_bottom"
-    private const val KEY_FLIPPED = "flipped"
-    private const val KEY_SIDE = "side"
-    private const val KEY_DELAY = "delay_ms"
-    private const val KEY_AUTO = "auto_move"
-
-    /** 连续相同 FEN 次数达到该阈值才认为局面稳定，降低闪烁误判 */
     private const val STABLE_HITS = 2
-
-    /** 自动走子后的冷却，避免动画中途重复识别 */
     private const val AUTO_COOLDOWN_MS = 900L
-
     private var pendingFen = ""
     private var pendingHits = 0
     private var lastAutoFen = ""
     private var lastAutoAt = 0L
 
+    private const val PREFS = "connect_session"
+    private const val KEY_LEFT = "rect_left"
+    private const val KEY_TOP = "rect_top"
+    private const val KEY_RIGHT = "rect_right"
+    private const val KEY_BOTTOM = "rect_bottom"
+    private const val KEY_SIDE = "side"
+    private const val KEY_AUTO = "auto_move"
+    private const val KEY_INTERVAL = "interval_ms"
+
     fun attach(context: Context) {
+        if (appContext != null) return
         appContext = context.applicationContext
-        loadPrefs(context.applicationContext)
+        loadPrefs(appContext!!)
     }
 
-    fun provideEngine(value: UcciEngine?) {
-        engine = value
-    }
-
-    fun provideReader(value: ChessboardReader?) {
-        reader = value
-    }
-
-    fun setBoardRect(rect: BoardRect?, flippedBoard: Boolean = flipped) {
+    fun setBoardRect(rect: BoardRect?) {
         boardRect = rect
-        flipped = flippedBoard
         appContext?.let { savePrefs(it) }
-        publish("棋盘范围已更新")
+        if (rect != null) publish("棋盘范围已更新") else publish("棋盘范围已清空，将自动找盘")
     }
 
-    fun setSide(side: String) {
-        if (side !in setOf("w", "b")) return
-        sideToMove = side
-        appContext?.let { savePrefs(it) }
-        publish("行棋方：${if (side == "w") "红" else "黑"}")
+    fun provideEngine(e: UcciEngine?) {
+        engine = e
     }
 
-    fun toggleSide() = setSide(if (sideToMove == "w") "b" else "w")
+    fun provideReader(r: ChessboardReader?) {
+        reader = r
+    }
+
+    fun toggleSide() {
+        sideToMove = if (sideToMove == "w") "b" else "w"
+        appContext?.let { savePrefs(it) }
+        publish("行棋方：${if (sideToMove == "w") "红方" else "黑方"}")
+    }
 
     fun setAutoMove(enabled: Boolean) {
         autoMoveOn = enabled
@@ -178,16 +142,18 @@ object ConnectSession {
         publish(if (enabled) "自动走：开" else "自动走：关")
     }
 
-    fun setDelayMs(value: Int) {
+    fun setIntervalMs(value: Int) {
         intervalMs = value.coerceIn(400, 8000)
         appContext?.let { savePrefs(it) }
         publish("识别间隔 ${intervalMs}ms")
     }
 
-    fun start(engineValue: UcciEngine? = engine, readerValue: ChessboardReader? = reader) {
-        if (isRunning) return
-        engineValue?.let { engine = it }
-        readerValue?.let { reader = it }
+    /** 启动识别循环（对齐 Pro 的 g 线程） */
+    fun start() {
+        if (isRunning) {
+            stop()
+            return
+        }
         if (engine?.isReady != true) {
             publish("引擎未就绪", State.ERROR)
             return
@@ -197,10 +163,9 @@ object ConnectSession {
             return
         }
         if (!CaptureService.isRunning) {
-            publish("屏幕识别未开，请回助手重新授权截屏", State.ERROR)
+            publish("屏幕识别未开，请回助手授权", State.ERROR)
             return
         }
-        // boardRect 为空时，由 tick 自动检测（对齐 Pro 的 YOLO 自动找盘）
         pendingFen = ""
         pendingHits = 0
         lastAutoFen = ""
@@ -227,19 +192,7 @@ object ConnectSession {
         publish("连线分析已停止", State.IDLE)
     }
 
-    fun toggle(engineValue: UcciEngine? = engine, readerValue: ChessboardReader? = reader) {
-        if (isRunning) stop() else start(engineValue, readerValue)
-    }
-
-    /** 立即识别一次（不启动循环），用于校准后验证 */
-    suspend fun recognizeOnce(readerValue: ChessboardReader? = reader): Position? {
-        val r = readerValue ?: reader ?: return null
-        val rect = boardRect ?: return null
-        val frame = withContext(Dispatchers.IO) { CaptureService.copyLatestBitmap() } ?: return null
-        return withContext(Dispatchers.IO) { readBoardStable(r, frame, rect) }
-    }
-
-    /** 手动出招：用当前分析结果在目标 App 上点一步（此路径才套用深度/时间） */
+    /** 手动出招：用当前分析结果点子 */
     fun playBestNow(onDone: ((Boolean) -> Unit)? = null) {
         val eng = engine
         val fen = lastFen
@@ -249,7 +202,6 @@ object ConnectSession {
             return
         }
         scope.launch {
-            // 出子：使用设置里的深度/时间
             val result = eng.analyze(
                 fen = fen,
                 movetimeMs = thinkMs,
@@ -268,30 +220,10 @@ object ConnectSession {
             if (ok) {
                 lastAutoFen = fen
                 lastAutoAt = System.currentTimeMillis()
-                publish("已出子 ${iccs} · 深度${result.depth}", State.AUTO_PLAYING, fen = fen, result = result)
+                publish("已出子 ${iccs}", State.AUTO_PLAYING, fen = fen, result = result)
             }
             withContext(Dispatchers.Main) { onDone?.invoke(ok) }
         }
-    }
-
-    private fun resultText(result: EngineResult): String {
-        val score = when {
-            result.mateIn != null -> "杀${result.mateIn}"
-            result.scoreCp != null -> "${result.scoreCp}分"
-            else -> "-"
-        }
-        return "深度${result.depth} $score"
-    }
-
-    private fun summarizeBoard(board: Position, elapsedMs: Long): String {
-        var pieces = 0
-        for (r in 0 until 10) {
-            for (f in 0 until 9) {
-                if (board.pieceAt(r, f) != null) pieces++
-            }
-        }
-        val side = if (sideToMove == "w") "红方" else "黑方"
-        return "${side}行棋 · ${pieces}子 · ${elapsedMs}ms"
     }
 
     private suspend fun tick() {
@@ -303,18 +235,16 @@ object ConnectSession {
                     eng?.isReady != true -> "引擎未就绪"
                     else -> "识别器未就绪"
                 },
-                State.WAITING_PERMISSION,
+                State.ERROR,
             )
             return
         }
         if (!CaptureService.isRunning) {
-            publish("屏幕识别已断开，请回助手点悬浮重新授权", State.ERROR)
+            publish("屏幕识别已断开，请回助手重新授权", State.ERROR)
             return
         }
-
-        // 自动走子冷却，避免读到动画中间态
         if (autoMoveOn && System.currentTimeMillis() - lastAutoAt < AUTO_COOLDOWN_MS) {
-            publish("走子动画等待中…", State.PAUSED)
+            publish("走子冷却中…", State.PAUSED)
             return
         }
 
@@ -324,28 +254,41 @@ object ConnectSession {
             return
         }
 
-        // boardRect 为空 → 自动检测（Pro 用 YOLO，我们用颜色）
         var rect = boardRect
         if (rect == null) {
             publish("自动找棋盘中…", State.RECOGNIZING)
-            val detected = withContext(Dispatchers.IO) { BoardAutoDetector.detect(frame) }
+            val detected = withContext(Dispatchers.IO) {
+                try {
+                    BoardAutoDetector.detect(frame)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "BoardAutoDetector failed", t)
+                    null
+                }
+            }
             if (detected != null) {
                 boardRect = detected
                 rect = detected
                 appContext?.let { savePrefs(it) }
-                publish("已自动找到棋盘 ${detected.right - detected.left}×${detected.bottom - detected.top}", State.RECOGNIZING)
+                publish("已找到棋盘 ${detected.right - detected.left}×${detected.bottom - detected.top}", State.RECOGNIZING)
             } else {
-                publish("未找到棋盘，请手动校准", State.ERROR)
+                publish("未找到棋盘：画面可能不含木色棋盘，请回助手校准", State.ERROR)
                 return
             }
         }
 
         publish("识别中…", State.RECOGNIZING)
         val started = System.currentTimeMillis()
-        val board = withContext(Dispatchers.IO) { readBoardStable(rd, frame, rect) }
+        val board = withContext(Dispatchers.IO) {
+            try {
+                rd.readBoard(frame, rect)
+            } catch (t: Throwable) {
+                Log.w(TAG, "readBoard failed", t)
+                null
+            }
+        }
         val elapsed = System.currentTimeMillis() - started
         if (board == null) {
-            publish("识别失败：画面异常", State.ERROR)
+            publish("识别失败：画面异常或棋盘范围不对", State.ERROR)
             return
         }
 
@@ -354,8 +297,6 @@ object ConnectSession {
             publish("等待对方走子…", State.PAUSED)
             return
         }
-
-        // 稳定窗口：连续相同才认定
         if (boardFen != pendingFen) {
             pendingFen = boardFen
             pendingHits = 1
@@ -372,33 +313,19 @@ object ConnectSession {
         lastFen = boardFen
         lastRecognizedOk = true
         lastRecognizedSummary = summarizeBoard(board, elapsed)
-        publish(
-            "已正常识别 · ${lastRecognizedSummary}",
-            State.RECOGNIZING,
-            fen = boardFen,
-            board = board,
-            recognizeMs = elapsed,
-        )
+        publish("已正常识别 · ${lastRecognizedSummary}", State.RECOGNIZING, fen = boardFen, board = board)
 
-        // 局面未变且已有结果 → 只刷新，不重算
         if (boardFen == lastResult.fen && lastResult.bestmove.isNotBlank()) {
-            publish(
-                "已正常识别 · 皮卡鱼:${resultText(lastResult)}",
-                State.ANALYZING,
-                fen = boardFen,
-                board = board,
-                result = lastResult,
-            )
+            publish("已正常识别 · 皮卡鱼:${resultText(lastResult)}", State.ANALYZING, fen = boardFen, board = board, result = lastResult)
             return
         }
 
         publish("皮卡鱼分析中…", State.ANALYZING, fen = boardFen, board = board)
         val result = eng.analyze(
             fen = boardFen,
-            // 纯分析：不套用设置里的深度/时间，固定短算一轮
             movetimeMs = if (useEngineLimits) thinkMs else 800,
             depth = if (useEngineLimits) searchDepth else 0,
-            multiPv = multiPv.coerceIn(1, 5),
+            multiPv = 1,
             infinite = false,
             history = emptyList(),
         )
@@ -407,14 +334,7 @@ object ConnectSession {
             return
         }
         lastResult = result
-        publish(
-            "已正常识别 · 皮卡鱼:${resultText(result)}",
-            State.ANALYZING,
-            fen = boardFen,
-            board = board,
-            result = result,
-            recognizeMs = elapsed,
-        )
+        publish("已正常识别 · 皮卡鱼:${resultText(result)}", State.ANALYZING, fen = boardFen, board = board, result = result)
 
         if (autoMoveOn && isRunning) {
             publish("自动走子…", State.AUTO_PLAYING, fen = boardFen, board = board, result = result)
@@ -422,21 +342,11 @@ object ConnectSession {
             if (ok) {
                 lastAutoFen = boardFen
                 lastAutoAt = System.currentTimeMillis()
-                // Pro：走完再等 500ms 再进入下一轮识别
                 Thread.sleep(500)
                 publish("已走 ${result.bestmove}", State.AUTO_PLAYING, fen = boardFen, board = board, result = result)
             } else {
                 publish("自动走子失败（检查无障碍）", State.ERROR, fen = boardFen, board = board, result = result)
             }
-        }
-    }
-
-    private fun readBoardStable(reader: ChessboardReader, frame: Bitmap, rect: BoardRect): Position? {
-        return try {
-            reader.readBoard(frame, rect)
-        } catch (t: Throwable) {
-            android.util.Log.w("Connect", "recognize failed", t)
-            null
         }
     }
 
@@ -447,92 +357,63 @@ object ConnectSession {
         return parts.joinToString(" ")
     }
 
-    /**
-     * 按 Pro象棋 FloatingWindowService.touchMove 的坐标方案点子：
-     * width=rect.w/10, height=rect.h/11；
-     * x = centerX - (4-file)*width；
-     * rank<=4: y=top+height+rank*height，否则 y=bottom-height-(9-rank)*height；
-     * 黑方走子时对 rank/file 做镜像；先点起点，再 150ms，后点终点。
-     */
+    private fun resultText(result: EngineResult): String {
+        val score = when {
+            result.mateIn != null -> "杀${result.mateIn}"
+            result.scoreCp != null -> "${result.scoreCp}分"
+            else -> "-"
+        }
+        return "深度${result.depth} $score"
+    }
+
+    private fun summarizeBoard(board: Position, elapsedMs: Long): String {
+        var pieces = 0
+        for (r in 0 until 10) for (f in 0 until 9) if (board.pieceAt(r, f) != null) pieces++
+        val side = if (sideToMove == "w") "红方" else "黑方"
+        return "${side}行棋 · ${pieces}子 · ${elapsedMs}ms"
+    }
+
+    /** Pro 坐标方案点子：width=w/10, height=h/11，黑方镜像，短按间隔 tapGapMs */
     private fun autoPlay(iccs: String, rect: BoardRect): Boolean {
         if (!LiveLinkService.isConnected) return false
-        val match = Regex("([a-i])([0-9])([a-i])([0-9])").matchEntentOrNull(iccs) ?: return false
-        val fromFile = Position.FILE_NAMES.indexOf(match.first)
-        val toFile = Position.FILE_NAMES.indexOf(match.third)
+        val match = Regex("([a-i])([0-9])([a-i])([0-9])").matchEntire(iccs.trim().lowercase()) ?: return false
+        val fromFile = Position.FILE_NAMES.indexOf(match.groupValues[1])
+        val toFile = Position.FILE_NAMES.indexOf(match.groupValues[3])
         if (fromFile < 0 || toFile < 0) return false
-        var fromRank = 9 - match.second
-        var toRank = 9 - match.fourth
+        var fromRank = 9 - match.groupValues[2].toInt()
+        var toRank = 9 - match.groupValues[4].toInt()
         var fromCol = fromFile
         var toCol = toFile
         if (sideToMove == "b") {
-            fromRank = 9 - fromRank
-            fromCol = 8 - fromCol
-            toRank = 9 - toRank
-            toCol = 8 - toCol
+            fromRank = 9 - fromRank; fromCol = 8 - fromCol
+            toRank = 9 - toRank; toCol = 8 - toCol
         }
-        val fx = proScreenX(rect, fromCol)
-        val fy = proScreenY(rect, fromRank)
-        val tx = proScreenX(rect, toCol)
-        val ty = proScreenY(rect, toRank)
-        val tappedFrom = LiveLinkService.tapAtSync(fx, fy)
-        if (!tappedFrom) return false
+        val (fx, fy) = proScreen(rect, fromCol, fromRank)
+        val (tx, ty) = proScreen(rect, toCol, toRank)
+        if (!LiveLinkService.tapAtSync(fx, fy)) return false
         Thread.sleep(tapGapMs.coerceIn(80, 2000).toLong())
         return LiveLinkService.tapAtSync(tx, ty)
     }
 
-    private fun proScreenX(rect: BoardRect, file: Int): Int {
-        val width = ((rect.right - rect.left) / 10).coerceAtLeast(1)
-        val centerX = (rect.left + rect.right) / 2
-        return centerX - ((4 - file) * width)
+    private fun proScreen(rect: BoardRect, file: Int, rank: Int): Pair<Int, Int> {
+        val w = ((rect.right - rect.left) / 10).coerceAtLeast(1)
+        val h = ((rect.bottom - rect.top) / 11).coerceAtLeast(1)
+        val cx = (rect.left + rect.right) / 2
+        val x = cx - ((4 - file) * w)
+        val y = if (rank <= 4) rect.top + h + rank * h else rect.bottom - h - ((9 - rank) * h)
+        return x to y
     }
-
-    private fun proScreenY(rect: BoardRect, rank: Int): Int {
-        val height = ((rect.bottom - rect.top) / 11).coerceAtLeast(1)
-        return if (rank <= 4) {
-            rect.top + height + rank * height
-        } else {
-            rect.bottom - height - ((9 - rank) * height)
-        }
-    }
-
-    private fun Regex.matchEntentOrNull(input: String): IccsParts? {
-        val m = matchEntire(input.trim().lowercase()) ?: return null
-        return IccsParts(
-            m.groupValues[1],
-            m.groupValues[2].toInt(),
-            m.groupValues[3],
-            m.groupValues[4].toInt(),
-        )
-    }
-
-    private data class IccsParts(val first: String, val second: Int, val third: String, val fourth: Int)
 
     private fun publish(
         message: String,
-        state: State = lastState,
+        state: State = State.IDLE,
         fen: String = lastFen,
         board: Position? = lastBoard,
         result: EngineResult = lastResult,
-        recognizeMs: Long = 0,
     ) {
         lastMessage = message
-        lastState = state
-        val snap = Snapshot(
-            state = state,
-            message = message,
-            fen = fen,
-            board = board,
-            recognizeMs = recognizeMs,
-            result = result,
-            autoMove = autoMoveOn,
-            delayMs = tapGapMs,
-            sideToMove = sideToMove,
-            running = isRunning,
-        )
-        // 只刷连线状态；云库/引擎由 MainActivity.updateOverlayState 统一刷
         try {
-            val overlay = com.xqassist.overlay.OverlayService.overlayDisplay
-            overlay?.updateConnect(
+            OverlayService.overlayDisplay?.updateConnect(
                 autoOn = autoMoveOn,
                 delayMs = tapGapMs,
                 sideLabel = if (sideToMove == "w") "红方" else "黑方",
@@ -541,7 +422,7 @@ object ConnectSession {
             )
         } catch (_: Throwable) {
         }
-        onSnapshot?.invoke(snap)
+        onSnapshot?.invoke(state, message, fen, result)
     }
 
     private fun prefs(context: Context): SharedPreferences =
@@ -556,9 +437,8 @@ object ConnectSession {
         if (left != Int.MIN_VALUE && top != Int.MIN_VALUE && right != Int.MIN_VALUE && bottom != Int.MIN_VALUE) {
             boardRect = BoardRect(left, top, right, bottom)
         }
-        flipped = p.getBoolean(KEY_FLIPPED, false)
         sideToMove = p.getString(KEY_SIDE, "w") ?: "w"
-        intervalMs = p.getInt(KEY_DELAY, 1200)
+        intervalMs = p.getInt(KEY_INTERVAL, 1200)
         autoMoveOn = p.getBoolean(KEY_AUTO, false)
     }
 
@@ -570,10 +450,14 @@ object ConnectSession {
                 putInt(KEY_TOP, rect.top)
                 putInt(KEY_RIGHT, rect.right)
                 putInt(KEY_BOTTOM, rect.bottom)
+            } else {
+                remove(KEY_LEFT)
+                remove(KEY_TOP)
+                remove(KEY_RIGHT)
+                remove(KEY_BOTTOM)
             }
-            putBoolean(KEY_FLIPPED, flipped)
             putString(KEY_SIDE, sideToMove)
-            putInt(KEY_DELAY, intervalMs)
+            putInt(KEY_INTERVAL, intervalMs)
             putBoolean(KEY_AUTO, autoMoveOn)
             apply()
         }

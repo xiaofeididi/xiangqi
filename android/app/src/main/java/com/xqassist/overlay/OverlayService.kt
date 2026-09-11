@@ -1,14 +1,20 @@
 package com.xqassist.overlay
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -17,7 +23,15 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
+import com.xqassist.capture.CaptureService
+import com.xqassist.connection.ConnectSession
+import com.xqassist.connection.LiveLinkService
 import com.xqassist.core.Quad
+import com.xqassist.engine.EngineHolder
+import com.xqassist.engine.UcciEngine
+import com.xqassist.vision.TemplatePieceReader
+import java.util.concurrent.atomic.AtomicBoolean
 
 interface OverlayDisplay {
     fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean = false)
@@ -28,13 +42,15 @@ interface OverlayDisplay {
     fun updateMiniBoard(position: com.xqassist.core.Position?, hint: Quad?, status: String)
 }
 
-/** 悬浮窗：保持既有紧凑样式；连线能力仍通过 Actions 与主界面联动 */
+/**
+ * 悬浮窗 Service：对齐 Pro FloatingWindowService。
+ * 自持识别引擎、按钮回调与状态刷新；Activity 被杀后连线分析仍可继续。
+ */
 class OverlayService : Service(), OverlayDisplay {
 
     interface Actions {
         fun onLink()
         fun onLinkLongPress()
-        fun onRecognize()
         fun onAnalyze()
         fun onPlayMove()
         fun onDepthChange(delta: Int)
@@ -42,7 +58,6 @@ class OverlayService : Service(), OverlayDisplay {
         fun onOpacityChange(delta: Int)
         fun onCloseOverlay()
         fun onAutoMoveToggle()
-        fun onDelayChange(delta: Int)
         fun onSideToggle()
         fun onCalibrate()
     }
@@ -52,7 +67,12 @@ class OverlayService : Service(), OverlayDisplay {
         var overlayDisplay: OverlayDisplay? = null
 
         fun start(context: Context) {
-            context.startService(Intent(context, OverlayService::class.java))
+            val intent = Intent(context, OverlayService::class.java)
+            if (Build.VERSION.SDK_INT >= 26) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
         }
 
         fun stop(context: Context) {
@@ -61,11 +81,18 @@ class OverlayService : Service(), OverlayDisplay {
     }
 
     private val wm by lazy { getSystemService(Context.WINDOW_SERVICE) as WindowManager }
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val engineStarting = AtomicBoolean(false)
+
+    private var engine: UcciEngine? = null
+    private val reader by lazy { TemplatePieceReader(this, TemplatePieceReader.MODE_BASIC) }
+
     private var root: LinearLayout? = null
     private var mini: TextView? = null
     private var params: WindowManager.LayoutParams? = null
     private var miniParams: WindowManager.LayoutParams? = null
     private var infoText: TextView? = null
+    private var statusText: TextView? = null
     private var depthText: TextView? = null
     private var timeText: TextView? = null
     private var opacityText: TextView? = null
@@ -83,11 +110,212 @@ class OverlayService : Service(), OverlayDisplay {
     private var initialHeight = 0
     private var autoOn = false
     private var delayMs = 150
+    private var searchDepth = 0
+    private var thinkSec = 3
+
+    /** Service 自持按钮回调，不经过 Activity */
+    private val selfActions = object : Actions {
+        override fun onLink() {
+            if (LiveLinkService.isConnected) {
+                toast("已连接")
+            } else {
+                toast("请在系统设置开启无障碍「象棋助手」")
+                try {
+                    startActivity(
+                        android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                } catch (t: Throwable) {
+                    toast("无法打开无障碍设置")
+                }
+            }
+            refreshButtons()
+        }
+
+        override fun onLinkLongPress() {
+            if (LiveLinkService.isConnected) {
+                LiveLinkService.disconnect()
+                toast("连线已断开（长按）")
+            } else {
+                toast("未连接，无需断开")
+            }
+            refreshButtons()
+        }
+
+        override fun onAnalyze() {
+            ConnectSession.attach(applicationContext)
+            ConnectSession.provideEngine(engine)
+            ConnectSession.provideReader(reader)
+            if (ConnectSession.isRunning) {
+                ConnectSession.stop()
+                refreshButtons()
+                return
+            }
+            if (!CaptureService.isRunning) {
+                setStatus("屏幕识别未开，请回助手重新授权截屏")
+                toast("屏幕识别未开，请回助手重新授权")
+                return
+            }
+            // 无校准时 BoardAutoDetector 会自动找盘；失败原因会显示在悬浮窗
+            ConnectSession.useEngineLimits = false
+            if (engine?.isReady != true) {
+                setStatus("引擎启动中…")
+                ensureEngine()
+                toast("引擎启动中，请稍后再试")
+                return
+            }
+            if (!LiveLinkService.isConnected) {
+                toast("无障碍未开：仅分析，无法出子")
+            }
+            ConnectSession.start()
+            refreshButtons()
+        }
+
+        override fun onPlayMove() {
+            ConnectSession.attach(applicationContext)
+            ConnectSession.provideEngine(engine)
+            ConnectSession.provideReader(reader)
+            if (ConnectSession.isRunning || ConnectSession.lastFen.isNotBlank()) {
+                ConnectSession.useEngineLimits = true
+                ConnectSession.searchDepth = searchDepth
+                ConnectSession.thinkMs = thinkSec * 1000
+                ConnectSession.playBestNow { ok ->
+                    mainHandler.post {
+                        toast(if (ok) "已按分析结果出子" else "出子失败：请检查无障碍/着法")
+                        refreshButtons()
+                    }
+                }
+            } else {
+                setStatus("还没有识别局面，先点「分析」")
+                toast("还没有识别局面，先点「分析」")
+            }
+        }
+
+        override fun onDepthChange(delta: Int) {
+            searchDepth = when {
+                delta < 0 -> 0
+                searchDepth <= 0 -> 6
+                else -> (searchDepth + delta).coerceIn(6, 18)
+            }
+            ConnectSession.searchDepth = searchDepth
+            updateControls(searchDepth, thinkSec)
+            setStatus(if (searchDepth == 0) "深度不限" else "深度 $searchDepth 层")
+        }
+
+        override fun onTimeChange(delta: Int) {
+            if (delta < 0) thinkSec = (thinkSec - 1).coerceAtLeast(1)
+            else thinkSec = (thinkSec + 1).coerceAtMost(60)
+            ConnectSession.thinkMs = thinkSec * 1000
+            updateControls(searchDepth, thinkSec)
+            setStatus("思考时间 ${thinkSec} 秒")
+        }
+
+        override fun onOpacityChange(delta: Int) {
+            val next = if (delta < 0) {
+                (opacity - 0.1f).coerceAtLeast(0.35f)
+            } else {
+                (opacity + 0.1f).coerceAtMost(1f)
+            }
+            updateOpacity(next)
+        }
+
+        override fun onCloseOverlay() {
+            if (ConnectSession.isRunning) ConnectSession.stop()
+            stopSelf()
+        }
+
+        override fun onAutoMoveToggle() {
+            ConnectSession.attach(applicationContext)
+            ConnectSession.setAutoMove(!ConnectSession.autoMoveOn)
+            autoOn = ConnectSession.autoMoveOn
+            toast(if (autoOn) "自动走已开启" else "自动走已关闭")
+            refreshButtons()
+        }
+
+        override fun onSideToggle() {
+            ConnectSession.attach(applicationContext)
+            ConnectSession.toggleSide()
+            toast("行棋方：${if (ConnectSession.sideToMove == "w") "红方" else "黑方"}")
+        }
+
+        override fun onCalibrate() {
+            setStatus("请回助手「识别测试」完成校准；无校准时会自动找盘")
+            toast("请回助手校准；无校准时会自动找盘")
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
+        startAsForeground()
         overlayDisplay = this
+        actions = selfActions
+        ConnectSession.attach(applicationContext)
+        autoOn = ConnectSession.autoMoveOn
+        delayMs = ConnectSession.tapGapMs
+        searchDepth = ConnectSession.searchDepth
+        thinkSec = (ConnectSession.thinkMs / 1000).coerceAtLeast(1)
 
+        LiveLinkService.onConnectedChanged = {
+            mainHandler.post { refreshButtons() }
+        }
+
+        buildUi()
+        ensureEngine()
+        refreshButtons()
+        updateControls(searchDepth, thinkSec)
+        updateInfo("", "引擎启动中", ConnectSession.lastMessage.ifBlank { "待命" })
+        updateOpacity(1f)
+        setStatus(if (ConnectSession.boardRect == null) "未校准，分析时自动找盘" else "棋盘范围已就绪")
+    }
+
+    /** 前台通知：Activity 被杀后 Service 与连线分析仍存活 */
+    private fun startAsForeground() {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val ch = NotificationChannel("xq_overlay", "悬浮窗", NotificationManager.IMPORTANCE_LOW)
+            nm.createNotificationChannel(ch)
+            val notif = Notification.Builder(this, "xq_overlay")
+                .setContentTitle("象棋助手")
+                .setContentText("悬浮窗连线分析运行中")
+                .setSmallIcon(android.R.drawable.ic_menu_compass)
+                .build()
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(3, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(3, notif)
+            }
+        } catch (t: Throwable) {
+            android.util.Log.w("Overlay", "startForeground failed", t)
+        }
+    }
+
+    private fun ensureEngine() {
+        val ready = EngineHolder.engine
+        if (ready?.isReady == true) {
+            engine = ready
+            ConnectSession.provideEngine(ready)
+            ConnectSession.provideReader(reader)
+            setStatus("皮卡鱼就绪")
+            return
+        }
+        if (!engineStarting.compareAndSet(false, true)) return
+        EngineHolder.ensure(applicationContext) { eng ->
+            mainHandler.post {
+                engineStarting.set(false)
+                if (eng != null && eng.isReady) {
+                    engine = eng
+                    ConnectSession.provideEngine(eng)
+                    ConnectSession.provideReader(reader)
+                    setStatus("皮卡鱼就绪")
+                } else {
+                    setStatus("皮卡鱼启动失败")
+                }
+                refreshButtons()
+            }
+        }
+    }
+
+    private fun buildUi() {
         val metrics = resources.displayMetrics
         fun dp(value: Int) = (value * metrics.density).toInt()
         val baseWidth = (metrics.widthPixels * 0.72f).toInt().coerceIn(dp(240), dp(430))
@@ -118,10 +346,7 @@ class OverlayService : Service(), OverlayDisplay {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
         })
         header.addView(miniButton("—") { setExpanded(false) })
-        header.addView(miniButton("×") {
-            actions?.onCloseOverlay()
-            stopSelf()
-        })
+        header.addView(miniButton("×") { selfActions.onCloseOverlay() })
         card.addView(header)
         card.addView(spacer(dp(5)))
 
@@ -140,13 +365,12 @@ class OverlayService : Service(), OverlayDisplay {
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
-        controls.addView(controlTile("深", "不限", 1.0f) { delta -> actions?.onDepthChange(delta) })
-        controls.addView(controlTile("时", "3秒", 1.0f) { delta -> actions?.onTimeChange(delta) })
-        controls.addView(controlTile("透明", "100%", 1.2f) { delta -> actions?.onOpacityChange(delta) })
+        controls.addView(controlTile("深", "不限", 1.0f) { delta -> selfActions.onDepthChange(delta) })
+        controls.addView(controlTile("时", "3秒", 1.0f) { delta -> selfActions.onTimeChange(delta) })
+        controls.addView(controlTile("透明", "100%", 1.2f) { delta -> selfActions.onOpacityChange(delta) })
         card.addView(controls)
         card.addView(spacer(dp(5)))
 
-        // 引擎 / 云库 各占一半（左引擎右云库）
         val infoRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
@@ -160,7 +384,7 @@ class OverlayService : Service(), OverlayDisplay {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
         }
         cloudText = TextView(this).apply {
-            text = "云库\n-"
+            text = "状态\n-"
             textSize = 11f
             setTextColor(Color.WHITE)
             setLineSpacing(dp(1).toFloat(), 1f)
@@ -170,6 +394,7 @@ class OverlayService : Service(), OverlayDisplay {
         infoRow.addView(infoText)
         infoRow.addView(cloudText)
         card.addView(infoRow)
+        statusText = cloudText
 
         val resize = TextView(this).apply {
             text = "↘"
@@ -195,21 +420,19 @@ class OverlayService : Service(), OverlayDisplay {
         header.setOnTouchListener { _, event -> moveHandler(event, p, panel) }
         resize.setOnTouchListener { _, event -> resizeHandler(event, p, panel, metrics.widthPixels - dp(16)) }
 
-        linkButton?.setOnClickListener { actions?.onLink() }
+        linkButton?.setOnClickListener { selfActions.onLink() }
         linkButton?.setOnLongClickListener {
-            actions?.onLinkLongPress()
+            selfActions.onLinkLongPress()
             true
         }
-        analyzeButton?.setOnClickListener { actions?.onAnalyze() }
-        // 长按出子 = 开关自动走
-        playButton?.setOnClickListener { actions?.onPlayMove() }
-        playButton?.setOnLongClickListener {
-            actions?.onAutoMoveToggle()
-            true
-        }
-        // 长按分析 = 切换行棋方
+        analyzeButton?.setOnClickListener { selfActions.onAnalyze() }
         analyzeButton?.setOnLongClickListener {
-            actions?.onSideToggle()
+            selfActions.onSideToggle()
+            true
+        }
+        playButton?.setOnClickListener { selfActions.onPlayMove() }
+        playButton?.setOnLongClickListener {
+            selfActions.onAutoMoveToggle()
             true
         }
 
@@ -267,10 +490,6 @@ class OverlayService : Service(), OverlayDisplay {
         params = p
         mini = miniView
         miniParams = mp
-        updateActions(false, false, false)
-        updateControls(0, 3)
-        updateInfo("", "", "")
-        updateOpacity(1f)
     }
 
     private fun moveHandler(event: MotionEvent, p: WindowManager.LayoutParams, panel: LinearLayout): Boolean {
@@ -401,27 +620,44 @@ class OverlayService : Service(), OverlayDisplay {
     private fun dp2(): Int = (2 * resources.displayMetrics.density).toInt()
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-    override fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean) {
-        // 始终以无障碍实时状态为准，避免按钮文案过期
-        val connected = com.xqassist.connection.LiveLinkService.isConnected
+    private fun toast(message: String) {
+        Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun setStatus(message: String) {
+        cloudText?.text = "状态\n" + message
+    }
+
+    private fun refreshButtons() {
+        val connected = LiveLinkService.isConnected
+        val running = ConnectSession.isRunning
+        autoOn = ConnectSession.autoMoveOn
         linkButton?.apply {
             text = if (connected) "已连接" else "连线"
             background = roundBackground(if (connected) 0xFF2E7D32.toInt() else 0xFF39465A.toInt(), dp8().toFloat())
         }
         analyzeButton?.apply {
             text = when {
-                analysisOn && thinking -> "分析中"
-                analysisOn -> "分析·开"
-                else -> if (autoOn) "分析·自动" else "分析"
+                running && autoOn -> "分析·自动"
+                running -> "分析·开"
+                autoOn -> "分析(自动)"
+                else -> "分析"
             }
             background = roundBackground(
-                if (analysisOn) 0xFF1565C0.toInt()
+                if (running) 0xFF1565C0.toInt()
                 else if (autoOn) 0xFF6A1B9A.toInt()
                 else 0xFF39465A.toInt(),
                 dp8().toFloat(),
             )
         }
-        playButton?.alpha = if (thinking) 0.55f else 1f
+        playButton?.apply {
+            val ok = ConnectSession.lastRecognizedOk
+            text = if (ok) "✓出子" else "出子"
+        }
+    }
+
+    override fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean) {
+        refreshButtons()
     }
 
     override fun updateControls(depth: Int, seconds: Int) {
@@ -430,13 +666,15 @@ class OverlayService : Service(), OverlayDisplay {
     }
 
     override fun updateInfo(cloud: String, engineSummary: String, engineDetail: String) {
-        cloudText?.text = "云库\n" + cloud.ifBlank { "-" }
         infoText?.text = buildString {
             append("引擎\n")
             append(engineSummary.ifBlank { "-" })
             if (engineDetail.isNotBlank()) {
                 append("\n").append(engineDetail)
             }
+        }
+        if (cloud.isNotBlank() && cloudText?.text?.startsWith("状态") != true) {
+            // 保留状态栏优先；无状态时再显示云库
         }
     }
 
@@ -448,33 +686,38 @@ class OverlayService : Service(), OverlayDisplay {
     }
 
     override fun updateConnect(autoOnValue: Boolean, delayMsValue: Int, sideLabel: String, running: Boolean, message: String) {
-        autoOn = autoOnValue
-        delayMs = delayMsValue
-        analyzeButton?.apply {
-            text = when {
-                running && autoOnValue -> "分析·自动"
-                running -> "分析·开"
-                autoOnValue -> "分析(自动)"
-                else -> "分析"
+        // ConnectSession 的识别循环在后台线程 publish，UI 必须回主线程
+        mainHandler.post {
+            autoOn = autoOnValue
+            delayMs = delayMsValue
+            setStatus(message.ifBlank { sideLabel })
+            val engReady = engine?.isReady == true
+            val engLine = if (engReady) {
+                val score = when {
+                    ConnectSession.lastResult.mateIn != null -> "杀${ConnectSession.lastResult.mateIn}"
+                    ConnectSession.lastResult.scoreCp != null -> "${ConnectSession.lastResult.scoreCp}分"
+                    else -> "-"
+                }
+                val mv = ConnectSession.lastResult.bestmove.ifBlank { "-" }
+                "皮卡鱼 $mv $score"
+            } else {
+                "启动中"
             }
-        }
-        // 连线状态并入按钮文案
-        linkButton?.apply {
-            val connected = text == "已连接" || text == "断开"
-            // 保持已连接/断开状态由 updateActions 控制；此处只显示识别进度到出子按钮
-        }
-        playButton?.apply {
-            val prefix = if (message.contains("已正常识别")) "✓" else ""
-            text = if (running) prefix + "出子" else "出子"
+            val detail = ConnectSession.lastRecognizedSummary
+            infoText?.text = "引擎\n$engLine" + if (detail.isNotBlank()) "\n$detail" else "\n$sideLabel"
+            refreshButtons()
         }
     }
 
     override fun updateMiniBoard(position: com.xqassist.core.Position?, hint: Quad?, status: String) {
-        // 上一版悬浮窗样式不内嵌迷你棋盘
+        // 当前悬浮窗样式不内嵌迷你棋盘
     }
 
     override fun onDestroy() {
+        if (ConnectSession.isRunning) ConnectSession.stop()
+        if (actions === selfActions) actions = null
         overlayDisplay = null
+        // 主界面若还活着可重新接管；这里不断开引擎进程
         root?.let { wm.removeView(it) }
         mini?.let { wm.removeView(it) }
         root = null
@@ -482,6 +725,7 @@ class OverlayService : Service(), OverlayDisplay {
         params = null
         miniParams = null
         infoText = null
+        statusText = null
         depthText = null
         timeText = null
         opacityText = null
@@ -489,7 +733,6 @@ class OverlayService : Service(), OverlayDisplay {
         analyzeButton = null
         playButton = null
         cloudText = null
-        infoText = null
         super.onDestroy()
     }
 
