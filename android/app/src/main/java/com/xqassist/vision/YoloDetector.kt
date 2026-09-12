@@ -171,6 +171,31 @@ object YoloDetector {
         return if (redKingRank in 0..4) rotate180(grid) else grid
     }
 
+    @Volatile
+    var lastDetectSummary: String = ""
+        private set
+
+    /** 在多个候选外框里选识别到棋子/将帅最多的那个 */
+    fun bestBoardAndGrid(results: Array<OutResult>, candidates: List<BoardRect>): Pair<BoardRect, Array<IntArray>>? {
+        var bestRect: BoardRect? = null
+        var bestGrid: Array<IntArray>? = null
+        var bestScore = -1
+        for (rect in candidates) {
+            val grid = toGrid(results, rect)
+            val pieces = countPieces(grid)
+            val kings = (if (hasKing(grid, true)) 3 else 0) + (if (hasKing(grid, false)) 3 else 0)
+            val score = pieces * 2 + kings
+            if (score > bestScore) {
+                bestScore = score
+                bestRect = rect
+                bestGrid = grid
+            }
+        }
+        if (bestRect == null || bestGrid == null) return null
+        lastDetectSummary = "boxes=${results.size} score=$bestScore pieces=${countPieces(bestGrid)}"
+        return bestRect to bestGrid
+    }
+
     fun gridToPosition(grid: Array<IntArray>): Position {
         val fen = gridToFen(grid) + " w - - 0 1"
         return Position.fromFen(fen)

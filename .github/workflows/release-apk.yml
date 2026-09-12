@@ -54,12 +54,12 @@ jobs:
           tag_name: ${{ steps.version.outputs.version }}
           name: xq-assist ${{ steps.version.outputs.version }}
           body: |
-            xq-assist 自动构建的中国象棋助手 APK（v0.2.60）。
+            xq-assist 自动构建的中国象棋助手 APK（v0.2.61）。
 
             - 本地人机对练 / 棋谱浏览
             - 皮卡鱼最优着法提示
             - 悬浮窗自持连线分析
-            - 接入 Pro NCNN YOLO（libmyapplication.so）识盘识子
+            - Pro NCNN YOLO 识盘识子；多候选外框择优，诊断信息上屏
             - 可选自动走子（无障碍，Pro 坐标方案）
             - 云库开局查询
 

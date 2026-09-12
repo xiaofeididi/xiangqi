@@ -327,8 +327,8 @@ class OverlayService : Service(), OverlayDisplay {
             val ok = YoloDetector.init(applicationContext)
             mainHandler.post {
                 setStatus(
-                    if (ok) "YOLO 就绪 · 皮卡鱼就绪"
-                    else "YOLO 失败(${YoloDetector.lastError}) · 回退模板识别"
+                    if (ok) "YOLO 就绪"
+                    else "YOLO 失败:${YoloDetector.lastError.ifBlank { "?" }} · 回退模板"
                 )
             }
         }.start()

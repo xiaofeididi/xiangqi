@@ -332,7 +332,8 @@ object ConnectSession {
         lastBoard = board
         lastFen = boardFen
         lastRecognizedOk = true
-        lastRecognizedSummary = summarizeBoard(board, elapsed)
+        lastRecognizedSummary = summarizeBoard(board, elapsed) +
+            if (YoloDetector.isReady) " · ${YoloDetector.lastDetectSummary}" else ""
         publish("已正常识别 · ${lastRecognizedSummary}", State.RECOGNIZING, fen = boardFen, board = board)
 
         if (boardFen == lastResult.fen && lastResult.bestmove.isNotBlank()) {
@@ -393,19 +394,26 @@ object ConnectSession {
     private fun recognizeByYolo(frame: android.graphics.Bitmap): RecognizeResult {
         val results = YoloDetector.detect(frame)
             ?: return RecognizeResult.Fail("YOLO 检测失败：${YoloDetector.lastError.ifBlank { "无结果" }}")
-        var rect = boardRect
-        if (rect == null) {
-            val inner = YoloDetector.boardRect(results, minConf = 0.6f)
-            if (inner == null) {
-                return RecognizeResult.NeedRect("YOLO 未找到棋盘(class14)，请对准棋盘或回助手校准")
-            }
-            rect = YoloDetector.expandToOuter(inner)
-            boardRect = rect
-            appContext?.let { savePrefs(it) }
+        if (results.isEmpty()) {
+            return RecognizeResult.Fail("YOLO 0 框，请确认画面是棋盘全屏")
         }
-        val grid = YoloDetector.toGrid(results, rect)
-        val oriented = YoloDetector.orient(grid)
-        screenFlipped = oriented !== grid
+        val inner = YoloDetector.boardRect(results, minConf = 0.5f)
+        val candidates = ArrayList<BoardRect>(3)
+        if (inner != null) {
+            candidates.add(YoloDetector.expandToOuter(inner))
+            candidates.add(inner)
+        }
+        boardRect?.let { candidates.add(it) }
+        if (candidates.isEmpty()) {
+            return RecognizeResult.NeedRect("YOLO 无 class14 棋盘(boxes=${results.size})，请对准棋盘")
+        }
+        val best = YoloDetector.bestBoardAndGrid(results, candidates)
+            ?: return RecognizeResult.Fail("YOLO 无法映射格点(boxes=${results.size})")
+        val (rect, gridRaw) = best
+        boardRect = rect
+        appContext?.let { savePrefs(it) }
+        val oriented = YoloDetector.orient(gridRaw)
+        screenFlipped = oriented !== gridRaw
         return RecognizeResult.Ok(YoloDetector.gridToPosition(oriented))
     }
 
