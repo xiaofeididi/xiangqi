@@ -32,7 +32,6 @@ import com.xqassist.core.Quad
 import com.xqassist.engine.EngineHolder
 import com.xqassist.engine.UcciEngine
 import com.xqassist.vision.TemplatePieceReader
-import com.xqassist.vision.YoloDetector
 import java.util.concurrent.atomic.AtomicBoolean
 
 interface OverlayDisplay {
@@ -69,12 +68,8 @@ class OverlayService : Service(), OverlayDisplay {
         var overlayDisplay: OverlayDisplay? = null
 
         fun start(context: Context) {
-            val intent = Intent(context, OverlayService::class.java)
-            if (Build.VERSION.SDK_INT >= 26) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            // 不用 startForegroundService：避免 startForeground 失败/超时导致打开即杀
+            context.startService(Intent(context, OverlayService::class.java))
         }
 
         fun stop(context: Context) {
@@ -148,9 +143,6 @@ class OverlayService : Service(), OverlayDisplay {
             ConnectSession.attach(applicationContext)
             ConnectSession.provideEngine(engine)
             ConnectSession.provideReader(reader)
-            if (!YoloDetector.isReady) {
-                ensureYolo()
-            }
             if (ConnectSession.isRunning) {
                 ConnectSession.stop()
                 refreshButtons()
@@ -301,7 +293,6 @@ class OverlayService : Service(), OverlayDisplay {
             ConnectSession.provideEngine(ready)
             ConnectSession.provideReader(reader)
             setStatus("皮卡鱼就绪")
-            ensureYolo()
             return
         }
         if (!engineStarting.compareAndSet(false, true)) return
@@ -319,19 +310,6 @@ class OverlayService : Service(), OverlayDisplay {
                 refreshButtons()
             }
         }
-        ensureYolo()
-    }
-
-    private fun ensureYolo() {
-        Thread {
-            val ok = YoloDetector.init(applicationContext)
-            mainHandler.post {
-                setStatus(
-                    if (ok) "YOLO 就绪"
-                    else "YOLO 失败:${YoloDetector.lastError.ifBlank { "?" }} · 回退模板"
-                )
-            }
-        }.start()
     }
 
     private fun buildUi() {

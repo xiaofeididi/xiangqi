@@ -27,10 +27,19 @@ object YoloDetector {
         private set
 
     private var net: yolov13? = null
+    private var libLoaded = false
 
+    /**
+     * 显式加载 so + initModel。
+     * 禁止在悬浮窗 onCreate 无条件调用：该 so 可能原生崩溃拖死进程。
+     */
     fun init(context: Context): Boolean {
         if (isReady) return true
         return try {
+            if (!libLoaded) {
+                System.loadLibrary("myapplication")
+                libLoaded = true
+            }
             val y = yolov13()
             val ok = y.initModel(false, context.applicationContext.assets)
             if (ok) {
