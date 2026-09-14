@@ -28,7 +28,7 @@ jobs:
       - name: Install NDK and CMake
         run: |
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "ndk;26.1.10909125" "cmake;3.22.1" >/dev/null
+          sdkmanager "ndk;25.2.9519653" "cmake;3.22.1" >/dev/null
 
       - name: Build debug APK
         working-directory: android
