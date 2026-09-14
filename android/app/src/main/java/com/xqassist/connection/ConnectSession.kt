@@ -11,6 +11,8 @@ import com.xqassist.overlay.OverlayService
 import com.xqassist.vision.BoardAutoDetector
 import com.xqassist.vision.BoardRect
 import com.xqassist.vision.ChessboardReader
+import com.xqassist.vision.PieceFirstReader
+import com.xqassist.vision.TemplateBankLoader
 import com.xqassist.vision.YoloDetector
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -106,7 +108,11 @@ object ConnectSession {
     private var pendingHits = 0
     private var lastAutoFen = ""
     private var lastAutoAt = 0L
-    private var emptyBoardTicks = 0
+    @Volatile
+    var emptyBoardTicks = 0
+
+    @Volatile
+    private var lastDetectNote = ""
 
     fun clearBoardRect() {
         boardRect = null
@@ -333,7 +339,9 @@ object ConnectSession {
         lastFen = boardFen
         lastRecognizedOk = true
         lastRecognizedSummary = summarizeBoard(board, elapsed) +
-            if (YoloDetector.isReady) " · ${YoloDetector.lastDetectSummary}" else ""
+            if (YoloDetector.isReady) " · ${YoloDetector.lastDetectSummary}"
+            else if (lastDetectNote.isNotBlank()) " · $lastDetectNote"
+            else ""
         publish("已正常识别 · ${lastRecognizedSummary}", State.RECOGNIZING, fen = boardFen, board = board)
 
         if (boardFen == lastResult.fen && lastResult.bestmove.isNotBlank()) {
@@ -417,7 +425,7 @@ object ConnectSession {
         return RecognizeResult.Ok(YoloDetector.gridToPosition(oriented))
     }
 
-    /** 回退：固定格点 + 模板 */
+    /** 回退：先找子再归格 + 宫位规则 */
     private fun recognizeByTemplate(frame: android.graphics.Bitmap, rd: com.xqassist.vision.ChessboardReader?): RecognizeResult {
         var rect = boardRect
         if (rect == null) {
@@ -432,6 +440,19 @@ object ConnectSession {
             }
             boardRect = rect
             appContext?.let { savePrefs(it) }
+        }
+        // 优先：墨迹找子 → 归格 → 宫位规则
+        appContext?.let { TemplateBankLoader.ensure(it) }
+        val pieceFirst = try {
+            PieceFirstReader.read(frame, rect)
+        } catch (t: Throwable) {
+            Log.w(TAG, "pieceFirst failed", t)
+            null
+        }
+        if (pieceFirst != null) {
+            val (pos, summary) = pieceFirst
+            lastDetectNote = summary
+            return RecognizeResult.Ok(orientBoard(pos))
         }
         val reader = rd ?: return RecognizeResult.Fail("识别器未就绪")
         val board = try {
