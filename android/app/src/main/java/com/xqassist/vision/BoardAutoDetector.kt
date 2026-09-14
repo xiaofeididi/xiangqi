@@ -118,9 +118,9 @@ object BoardAutoDetector {
             if (d in 80..200) rowSpacings.add(d)
         }
         if (colSpacings.size < 2 || rowSpacings.isEmpty()) return null
-        colSpacings.sort(); rowSpacings.sort()
-        val cellW = colSpacings[colSpacings.size / 2]
-        val cellH = rowSpacings[rowSpacings.size / 2]
+        // 真实格距用最小间距，避免 2 格跨度把中位数拉大
+        val cellW = colSpacings.min()
+        val cellH = rowSpacings.min()
         if (cellW < 80 || cellH < 80) return null
 
         var bestScore = -1

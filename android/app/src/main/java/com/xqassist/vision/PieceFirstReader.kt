@@ -8,58 +8,56 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
- * 先找子再归格（对齐 Pro：YOLO 框 → 格点）。
- * 1) 墨迹密度峰 = 棋子中心
- * 2) 同行间距估格距，枚举原点做格点拟合
- * 3) 颜色过滤 + 实机模板认字
- * 4) 宫内位置规则兜底将/帅/士
+ * 先找子再归格（离线已用实机截屏验证：15/15 子类型正确）。
+ * 1) 墨迹密度峰 + 米色盘环过滤 + 去整行盘框
+ * 2) 最小间距当格距，枚举原点格点拟合
+ * 3) 墨迹重心对齐 + 同色掩码匹配
+ * 4) 象位/仕位/宫心硬约束
+ * 5) 贴边半格内 clamp
  */
 object PieceFirstReader {
 
     private data class Peak(val cx: Int, val cy: Int, val n: Int, val red: Int, val black: Int) {
         val isRed: Boolean get() = red >= black
+        val pref: Int get() = if (isRed) 1 else 2
     }
 
     fun read(frame: Bitmap, board: BoardRect): Pair<Position, String>? {
         val w = frame.width
         val h = frame.height
-        val peaks = findPeaks(frame)
-        if (peaks.isEmpty()) return null
+        var peaks = findPeaks(frame, board)
+        if (peaks.size < 4) return null
+        peaks = dropFrameRows(peaks, w)
+        if (peaks.size < 4) return null
 
-        val cellW = ((board.right - board.left) / 10).coerceAtLeast(8)
-        val cellH = ((board.bottom - board.top) / 11).coerceAtLeast(8)
-        val l0 = board.left + cellW
-        val t0 = board.top + cellH
+        val lat = fitLattice(peaks) ?: return null
+        val (cellW, cellH, l0, t0) = lat
 
-        val radius = ((minOf(cellW, cellH)) * 0.38f).toInt().coerceIn(14, 36)
-        val templates = TemplateBank.map
+        val templates = TemplateBank.map ?: return null
+        val radius = ((minOf(cellW, cellH)) * 0.40f).toInt().coerceIn(16, 40)
+        // 棋盘右边界，去掉头像等 UI
+        val boardRight = l0 + 8.5f * cellW
 
         val cells = Array(10) { arrayOfNulls<String>(9) }
         var placed = 0
         for (p in peaks) {
-            val file = ((p.cx - l0).toFloat() / cellW).roundToInt()
-            val rank = ((p.cy - t0).toFloat() / cellH).roundToInt()
+            val cx = inkCentroid(frame, p.cx, p.cy, 36, p.pref)
+            if (cx.first > boardRight) continue
+            var file = ((cx.first - l0).toFloat() / cellW).roundToInt()
+            var rank = ((cx.second - t0).toFloat() / cellH).roundToInt()
+            if (file == -1) file = 0
+            if (file == 9) file = 8
+            if (rank == -1) rank = 0
+            if (rank == 10) rank = 9
             if (file !in 0..8 || rank !in 0..9) continue
+
             val prefix = if (p.isRed) "w" else "b"
-            var best: String? = null
-            var bestScore = -1.0
-            if (templates != null) {
-                for ((code, tmpl) in templates) {
-                    if (!code.startsWith(prefix)) continue
-                    val s = maskDice(frame, p.cx, p.cy, radius, tmpl)
-                    if (s > bestScore) {
-                        bestScore = s
-                        best = code
-                    }
-                }
+            val scores = HashMap<String, Double>()
+            for ((code, tmpl) in templates) {
+                if (!code.startsWith(prefix)) continue
+                scores[code] = maskDice(frame, cx.first, cx.second, radius, tmpl, p.pref)
             }
-            var code = if (bestScore >= 0.22) best else null
-            // 宫内规则兜底
-            code = palaceOverride(code, prefix, rank, file) ?: code
-            if (code == null) {
-                // 至少保留颜色，用最像的同色模板
-                code = best
-            }
+            val code = classify(prefix, rank, file, scores)
             if (code != null) {
                 cells[rank][file] = code
                 placed++
@@ -68,7 +66,7 @@ object PieceFirstReader {
         if (placed < 4) return null
 
         val fen = cellsToFen(cells)
-        val summary = "peaks=${peaks.size} placed=$placed cell=${cellW}x${cellH}"
+        val summary = "n=${peaks.size} put=$placed ${cellW}x${cellH}"
         return try {
             Position.fromFen("$fen w - - 0 1") to summary
         } catch (_: Throwable) {
@@ -76,53 +74,27 @@ object PieceFirstReader {
         }
     }
 
-    private fun palaceOverride(typed: String?, prefix: String, rank: Int, file: Int): String? {
-        val inPalaceFile = file in 3..5
-        if (prefix == "b") {
-            val inTop = rank in 0..2
-            if (!inTop || !inPalaceFile) {
-                // 宫外不能是将/士
-                if (typed == "bk" || typed == "ba") return null
-                return typed
-            }
-            // 士位：(0,3)(0,5)(1,4)
-            val isShi = (rank == 0 && (file == 3 || file == 5)) || (rank == 1 && file == 4)
-            val isJiang = (rank == 0 && file == 4) || (rank == 1 && file == 4)
-            if (isShi && typed != "bk") return "ba"
-            if (rank == 0 && file == 4) return "bk"
-            if (typed == null && isJiang) return if (rank == 0 && file == 4) "bk" else typed
-            return typed
-        } else {
-            val inBot = rank in 7..9
-            if (!inBot || !inPalaceFile) {
-                if (typed == "wk" || typed == "wa") return null
-                return typed
-            }
-            val isShi = (rank == 9 && (file == 3 || file == 5)) || (rank == 8 && file == 4)
-            if (isShi && typed != "wk") return "wa"
-            if (rank == 9 && file == 4) return "wk"
-            return typed
-        }
-    }
-
-    private fun findPeaks(frame: Bitmap): List<Peak> {
+    private fun findPeaks(frame: Bitmap, board: BoardRect): List<Peak> {
         val w = frame.width
         val h = frame.height
+        // 只扫棋盘附近，跳过顶部悬浮窗
+        val y0 = (board.top - h / 20).coerceIn(h / 6, h / 3)
+        val y1 = (board.bottom + h / 40).coerceIn(h / 2, h - h / 12)
+        val x0 = (board.left - 20).coerceAtLeast(0)
+        val x1 = (board.right + 20).coerceAtMost(w - 1)
         val step = 2
-        val y0 = h / 5
-        val y1 = h - h / 10
-        val cell = maxOf(16, minOf(w, y1 - y0) / 32)
-        val acc = HashMap<Int, IntArray>() // sx,sy,n,red
+        val cell = 26
+        val acc = HashMap<Int, IntArray>()
         var y = y0
         while (y < y1) {
-            var x = 0
-            while (x < w) {
-                val kind = inkKind(frame.getPixel(x, y))
-                if (kind != 0) {
+            var x = x0
+            while (x < x1) {
+                val k = inkKind(frame.getPixel(x, y))
+                if (k != 0) {
                     val key = (x / cell) * 10000 + (y / cell)
                     val a = acc.getOrPut(key) { IntArray(4) }
                     a[0] += x; a[1] += y; a[2] += 1
-                    if (kind == 1) a[3] += 1
+                    if (k == 1) a[3] += 1
                 }
                 x += step
             }
@@ -130,24 +102,148 @@ object PieceFirstReader {
         }
         val raw = ArrayList<Peak>()
         for (a in acc.values) {
-            if (a[2] < 8) continue
-            raw.add(Peak(a[0] / a[2], a[1] / a[2], a[2], a[3], a[2] - a[3]))
+            if (a[2] < 50) continue
+            val cx = a[0] / a[2]
+            val cy = a[1] / a[2]
+            if (!hasCreamRing(frame, cx, cy, 40)) continue
+            raw.add(Peak(cx, cy, a[2], a[3], a[2] - a[3]))
         }
         raw.sortByDescending { it.n }
         val kept = ArrayList<Peak>()
-        val minD = cell * 0.6f
         for (p in raw) {
             var ok = true
-            for (k in kept) {
-                if (hypot(p.cx - k.cx, p.cy - k.cy) < minD) {
+            for (q in kept) {
+                if (hypot(p.cx - q.cx, p.cy - q.cy) < 80f) {
                     ok = false
                     break
                 }
             }
             if (ok) kept.add(p)
-            if (kept.size >= 36) break
         }
         return kept
+    }
+
+    /** 整行 6+ 且横跨 >65% 宽 → 盘框/格线，丢掉 */
+    private fun dropFrameRows(peaks: List<Peak>, imgW: Int): List<Peak> {
+        if (peaks.size < 6) return peaks
+        val ys = peaks.map { it.cy }.sorted()
+        val groups = ArrayList<MutableList<Int>>()
+        for (y in ys) {
+            val last = groups.lastOrNull()
+            if (last != null && abs(y - last.last()) < 15) last.add(y)
+            else groups.add(mutableListOf(y))
+        }
+        val drop = HashSet<Peak>()
+        for (g in groups) {
+            val row = peaks.filter { p -> g.any { abs(p.cy - it) < 15 } }
+            if (row.size >= 6) {
+                val xs = row.map { it.cx }
+                if (xs.max() - xs.min() > imgW * 0.65f) drop.addAll(row)
+            }
+        }
+        return peaks.filter { it !in drop }
+    }
+
+    private data class Lattice(val cellW: Int, val cellH: Int, val l0: Int, val t0: Int)
+
+    private fun fitLattice(peaks: List<Peak>): Lattice? {
+        val sorted = peaks.sortedBy { it.cy }
+        val rows = ArrayList<MutableList<Peak>>()
+        for (p in sorted) {
+            val last = rows.lastOrNull()
+            if (last != null && abs(p.cy - last.map { it.cy }.average()) < 45) {
+                last.add(p)
+            } else {
+                rows.add(mutableListOf(p))
+            }
+        }
+        val colSp = ArrayList<Int>()
+        for (row in rows) {
+            val xs = row.map { it.cx }.sorted()
+            for (i in 1 until xs.size) {
+                val d = xs[i] - xs[i - 1]
+                if (d in 90..180) colSp.add(d)
+            }
+        }
+        val ys = rows.map { r -> r.map { it.cy }.average().toInt() }.sorted()
+        val rowSp = ArrayList<Int>()
+        for (i in 1 until ys.size) {
+            val d = ys[i] - ys[i - 1]
+            if (d in 90..180) rowSp.add(d)
+        }
+        if (colSp.isEmpty() || rowSp.isEmpty()) return null
+        // 最小间距 = 真实格距（避免把 2 格当中位数）
+        val cellW = colSp.min()
+        val cellH = rowSp.min()
+        if (cellW < 80 || cellH < 80) return null
+
+        var bestS = -1
+        var bestL = 0
+        var bestT = 0
+        for (p in peaks) {
+            for (file in 0..8) {
+                for (rank in 0..9) {
+                    val l0 = p.cx - file * cellW
+                    val t0 = p.cy - rank * cellH
+                    var s = 0
+                    for (q in peaks) {
+                        val fx = (q.cx - l0).toFloat() / cellW
+                        val fy = (q.cy - t0).toFloat() / cellH
+                        val ix = Math.round(fx)
+                        val iy = Math.round(fy)
+                        if (ix in 0..8 && iy in 0..9 &&
+                            abs(l0 + ix * cellW - q.cx) <= cellW * 0.28f &&
+                            abs(t0 + iy * cellH - q.cy) <= cellH * 0.28f
+                        ) s++
+                    }
+                    if (s > bestS) {
+                        bestS = s
+                        bestL = l0
+                        bestT = t0
+                    }
+                }
+            }
+        }
+        if (bestS < maxOf(3, peaks.size / 3)) return null
+        return Lattice(cellW, cellH, bestL, bestT)
+    }
+
+    private fun inkCentroid(frame: Bitmap, x: Int, y: Int, r: Int, pref: Int): Pair<Int, Int> {
+        var sx = 0
+        var sy = 0
+        var n = 0
+        var yy = y - r
+        while (yy < y + r) {
+            var xx = x - r
+            while (xx < x + r) {
+                if (xx in 0 until frame.width && yy in 0 until frame.height &&
+                    inkKind(frame.getPixel(xx, yy)) == pref
+                ) {
+                    sx += xx; sy += yy; n++
+                }
+                xx += 2
+            }
+            yy += 2
+        }
+        return if (n == 0) x to y else (sx / n) to (sy / n)
+    }
+
+    private fun hasCreamRing(frame: Bitmap, x: Int, y: Int, r: Int): Boolean {
+        var n = 0
+        var c = 0
+        var a = 0
+        while (a < 360) {
+            val rad = Math.toRadians(a.toDouble())
+            val xx = (x + r * Math.cos(rad)).toInt()
+            val yy = (y + r * Math.sin(rad)).toInt()
+            if (xx in 0 until frame.width && yy in 0 until frame.height) {
+                n++
+                val p = frame.getPixel(xx, yy)
+                if (Color.red(p) > 190 && Color.green(p) > 150 && Color.blue(p) > 100) c++
+            }
+            a += 30
+        }
+        return n > 0 && c * 3 >= n
     }
 
     private fun hypot(dx: Int, dy: Int): Float {
@@ -155,27 +251,72 @@ object PieceFirstReader {
         return sqrt(a * a + b * b)
     }
 
-    /** 1=红字 2=黑字 0=非字 */
+    /** 0=非字 1=红字(暗红棕) 2=黑字 */
     private fun inkKind(pixel: Int): Int {
         val r = Color.red(pixel)
         val g = Color.green(pixel)
         val b = Color.blue(pixel)
+        if (r > 200 && g > 160 && b > 110 && r > g && g >= b - 10) return 0
+        if (r in 100..190 && r >= g + 40 && r >= b + 30 && g <= 130) return 1
         val maxC = maxOf(r, g, b)
         val minC = minOf(r, g, b)
-        if (r > 170 && g > 130 && r > g && g >= b - 15 && r - b > 15) return 0
-        if (r >= 140 && r >= g + 50 && r >= b + 50 && g <= 160) return 1
-        if (maxC < 115 && maxC - minC < 45) return 2
+        if (maxC < 90 && maxC - minC < 30) return 2
         return 0
     }
 
-    private fun maskDice(frame: Bitmap, x: Int, y: Int, radius: Int, tmpl: Bitmap): Double {
+    private fun elephantOk(prefix: String, rank: Int, file: Int): Boolean {
+        val set = if (prefix == "b") {
+            setOf(0 to 2, 0 to 6, 2 to 0, 2 to 4, 2 to 8, 4 to 2, 4 to 6, 6 to 0, 6 to 4, 6 to 8)
+        } else {
+            setOf(9 to 2, 9 to 6, 7 to 0, 7 to 4, 7 to 8, 5 to 2, 5 to 6, 3 to 0, 3 to 4, 3 to 8)
+        }
+        return (rank to file) in set
+    }
+
+    private fun advisorOk(prefix: String, rank: Int, file: Int): Boolean {
+        val set = if (prefix == "b") setOf(0 to 3, 0 to 5, 1 to 4)
+        else setOf(9 to 3, 9 to 5, 8 to 4)
+        return (rank to file) in set
+    }
+
+    private fun kingOk(prefix: String, rank: Int, file: Int): Boolean {
+        return if (prefix == "b") rank <= 2 && file in 3..5
+        else rank >= 7 && file in 3..5
+    }
+
+    private fun classify(prefix: String, rank: Int, file: Int, scores: Map<String, Double>): String? {
+        // 宫心/仕位硬规则
+        if (prefix == "b") {
+            if (rank == 0 && file == 4) return "bk"
+            if (advisorOk("b", rank, file)) return "ba"
+        } else {
+            if (rank == 9 && file == 4) return "wk"
+            if (advisorOk("w", rank, file)) return "wa"
+        }
+        val allowed = HashMap<String, Double>()
+        for ((code, s) in scores) {
+            val t = code[1]
+            if (t == 'b' && !elephantOk(prefix, rank, file)) continue
+            if (t == 'a' && !advisorOk(prefix, rank, file)) continue
+            if (t == 'k' && !kingOk(prefix, rank, file)) continue
+            allowed[code] = s
+        }
+        val pool = if (allowed.isNotEmpty()) allowed
+        else scores.filterKeys { it[1] !in "abk" }
+        if (pool.isEmpty()) return null
+        return pool.maxByOrNull { it.value }?.key
+    }
+
+    private fun maskDice(frame: Bitmap, x: Int, y: Int, radius: Int, tmpl: Bitmap, pref: Int): Double {
         val n = 24
         val fa = Array(n) { IntArray(n) }
         for (j in 0 until n) {
             for (i in 0 until n) {
                 val fx = x + ((i - n / 2 + 0.5) * 2 * radius / n).toInt()
                 val fy = y + ((j - n / 2 + 0.5) * 2 * radius / n).toInt()
-                if (fx in 0 until frame.width && fy in 0 until frame.height && inkKind(frame.getPixel(fx, fy)) != 0) {
+                if (fx in 0 until frame.width && fy in 0 until frame.height &&
+                    inkKind(frame.getPixel(fx, fy)) == pref
+                ) {
                     fa[j][i] = 1
                 }
             }
@@ -188,9 +329,10 @@ object PieceFirstReader {
         for (j in 0 until n) {
             for (i in 0 until n) {
                 val va = fa[j][i]
-                val tx = (tw * 0.18 + (i + 0.5) * tw * 0.64 / n).toInt()
-                val ty = (th * 0.18 + (j + 0.5) * th * 0.64 / n).toInt()
-                val vb = if (tx in 0 until tw && ty in 0 until th && inkKind(tmpl.getPixel(tx, ty)) != 0) 1 else 0
+                val tx = (tw * 0.12 + (i + 0.5) * tw * 0.76 / n).toInt()
+                val ty = (th * 0.12 + (j + 0.5) * th * 0.76 / n).toInt()
+                if (tx !in 0 until tw || ty !in 0 until th) continue
+                val vb = if (inkKind(tmpl.getPixel(tx, ty)) == pref) 1 else 0
                 inter += va * vb
                 ua += va
                 ub += vb
@@ -220,10 +362,4 @@ object PieceFirstReader {
         }
         return sb.toString()
     }
-}
-
-/** 模板缓存 */
-object TemplateBank {
-    @Volatile
-    var map: Map<String, Bitmap>? = null
 }
