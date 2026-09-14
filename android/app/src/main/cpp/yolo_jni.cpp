@@ -4,10 +4,27 @@
 #include <ncnn/net.h>
 #include <vector>
 #include <cstring>
+#include <cstdlib>
+#include <cstdarg>
 
 #define LOG_TAG "YoloNcnn"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+// libncnn.a 用新版 libc++ 编译，NDK r25 缺这个符号
+namespace std {
+inline namespace __ndk1 {
+void __libcpp_verbose_abort(const char* format, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, format);
+    vsnprintf(buf, sizeof(buf), format, ap);
+    va_end(ap);
+    LOGE("libc++ abort: %s", buf);
+    abort();
+}
+}
+}
 
 static ncnn::Net* g_net = nullptr;
 
