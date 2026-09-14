@@ -5,6 +5,11 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Log
 
+object TemplateBank {
+    @Volatile
+    var map: Map<String, Bitmap>? = null
+}
+
 object TemplateBankLoader {
     private const val TAG = "TplBank"
     private val codes = listOf(
