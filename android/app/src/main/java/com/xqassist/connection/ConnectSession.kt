@@ -349,6 +349,7 @@ object ConnectSession {
         }
 
         publish("皮卡鱼分析中…", State.ANALYZING, fen = boardFen, board = board)
+        // 分析：固定短算，忽略深度/时间设置；仅出子(useEngineLimits)才用设置
         val result = eng.analyze(
             fen = boardFen,
             movetimeMs = if (useEngineLimits) thinkMs else 800,
