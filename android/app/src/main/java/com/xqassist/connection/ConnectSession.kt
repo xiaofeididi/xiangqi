@@ -30,6 +30,16 @@ import kotlinx.coroutines.withContext
 object ConnectSession {
 
     private const val TAG = "Connect"
+    private const val STABLE_HITS = 2
+    private const val AUTO_COOLDOWN_MS = 900L
+    private const val PREFS = "connect_session"
+    private const val KEY_LEFT = "rect_left"
+    private const val KEY_TOP = "rect_top"
+    private const val KEY_RIGHT = "rect_right"
+    private const val KEY_BOTTOM = "rect_bottom"
+    private const val KEY_SIDE = "side"
+    private const val KEY_AUTO = "auto_move"
+    private const val KEY_INTERVAL = "interval_ms"
 
     enum class State {
         IDLE, WAITING_FRAME, RECOGNIZING, ANALYZING, AUTO_PLAYING, PAUSED, ERROR
@@ -102,14 +112,13 @@ object ConnectSession {
     private var reader: ChessboardReader? = null
     private var appContext: Context? = null
 
-    private const val STABLE_HITS = 2
-    private const val AUTO_COOLDOWN_MS = 900L
     private var pendingFen = ""
     private var pendingHits = 0
     private var lastAutoFen = ""
     private var lastAutoAt = 0L
+
     @Volatile
-    var emptyBoardTicks = 0
+    private var emptyBoardTicks = 0
 
     @Volatile
     private var lastDetectNote = ""
@@ -120,14 +129,6 @@ object ConnectSession {
         publish("棋盘范围已清空，将重新自动找盘")
     }
 
-    private const val PREFS = "connect_session"
-    private const val KEY_LEFT = "rect_left"
-    private const val KEY_TOP = "rect_top"
-    private const val KEY_RIGHT = "rect_right"
-    private const val KEY_BOTTOM = "rect_bottom"
-    private const val KEY_SIDE = "side"
-    private const val KEY_AUTO = "auto_move"
-    private const val KEY_INTERVAL = "interval_ms"
 
     fun attach(context: Context) {
         if (appContext != null) return

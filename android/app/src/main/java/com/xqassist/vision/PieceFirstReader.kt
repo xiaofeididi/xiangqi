@@ -32,7 +32,7 @@ object PieceFirstReader {
         val t0 = board.top + cellH
 
         val radius = ((minOf(cellW, cellH)) * 0.38f).toInt().coerceIn(14, 36)
-        val templates = TemplateBank.get(frame.contextOrNull())
+        val templates = TemplateBank.map
 
         val cells = Array(10) { arrayOfNulls<String>(9) }
         var placed = 0
@@ -76,9 +76,6 @@ object PieceFirstReader {
         }
     }
 
-    private fun Bitmap.contextOrNull(): android.content.Context? = null
-
-    /** 宫内：帅/将只在 file3-5 rank0-2 / 7-9；士在对角线 */
     private fun palaceOverride(typed: String?, prefix: String, rank: Int, file: Int): String? {
         val inPalaceFile = file in 3..5
         if (prefix == "b") {
@@ -225,10 +222,8 @@ object PieceFirstReader {
     }
 }
 
-/** 模板缓存，由 Overlay/Connect 注入 assets 加载结果 */
+/** 模板缓存 */
 object TemplateBank {
     @Volatile
     var map: Map<String, Bitmap>? = null
-
-    fun get(@Suppress("UNUSED_PARAMETER") ctx: Any?): Map<String, Bitmap>? = map
 }
