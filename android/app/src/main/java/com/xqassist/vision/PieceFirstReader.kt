@@ -64,6 +64,7 @@ object PieceFirstReader {
             }
         }
         if (placed < 4) return null
+        ensureKings(cells)
 
         val fen = cellsToFen(cells)
         val summary = "n=${peaks.size} put=$placed ${cellW}x${cellH}"
@@ -285,13 +286,11 @@ object PieceFirstReader {
     }
 
     private fun classify(prefix: String, rank: Int, file: Int, scores: Map<String, Double>): String? {
-        // 宫心/仕位硬规则
+        // 只硬定宫心（开局常见）；帅/仕移位后靠模板+合法格，不能把 f3 的帅打成仕
         if (prefix == "b") {
-            if (rank == 0 && file == 4) return "bk"
-            if (advisorOk("b", rank, file)) return "ba"
+            if (rank == 0 && file == 4 && (scores["bk"] ?: 0.0) >= 0.35) return "bk"
         } else {
-            if (rank == 9 && file == 4) return "wk"
-            if (advisorOk("w", rank, file)) return "wa"
+            if (rank == 9 && file == 4 && (scores["wk"] ?: 0.0) >= 0.35) return "wk"
         }
         val allowed = HashMap<String, Double>()
         for ((code, s) in scores) {
@@ -305,6 +304,50 @@ object PieceFirstReader {
         else scores.filterKeys { it[1] !in "abk" }
         if (pool.isEmpty()) return null
         return pool.maxByOrNull { it.value }?.key
+    }
+
+    /** 缺将/帅时，在宫内找一颗子顶上（帅走离中路仍要能分析） */
+    private fun ensureKings(cells: Array<Array<String?>>) {
+        if (!hasKing(cells, "wk")) {
+            var best: Pair<Int, Int>? = null
+            var bestS = -1.0
+            for (rank in 7..9) {
+                for (file in 3..5) {
+                    val c = cells[rank][file] ?: continue
+                    if (c.startsWith("w")) {
+                        // 宫内已有红子，优先非仕
+                        val s = if (c == "wa") 0.5 else 1.0
+                        if (s > bestS) {
+                            bestS = s
+                            best = rank to file
+                        }
+                    }
+                }
+            }
+            best?.let { (r, f) -> cells[r][f] = "wk" }
+        }
+        if (!hasKing(cells, "bk")) {
+            var best: Pair<Int, Int>? = null
+            var bestS = -1.0
+            for (rank in 0..2) {
+                for (file in 3..5) {
+                    val c = cells[rank][file] ?: continue
+                    if (c.startsWith("b")) {
+                        val s = if (c == "ba") 0.5 else 1.0
+                        if (s > bestS) {
+                            bestS = s
+                            best = rank to file
+                        }
+                    }
+                }
+            }
+            best?.let { (r, f) -> cells[r][f] = "bk" }
+        }
+    }
+
+    private fun hasKing(cells: Array<Array<String?>>, code: String): Boolean {
+        for (r in 0 until 10) for (f in 0 until 9) if (cells[r][f] == code) return true
+        return false
     }
 
     private fun maskDice(frame: Bitmap, x: Int, y: Int, radius: Int, tmpl: Bitmap, pref: Int): Double {
