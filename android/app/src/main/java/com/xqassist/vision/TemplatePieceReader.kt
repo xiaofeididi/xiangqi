@@ -77,11 +77,12 @@ class TemplatePieceReader(
                 val rr = Color.red(c)
                 val gg = Color.green(c)
                 val bb = Color.blue(c)
-                if (rr > 150 && rr > gg && gg >= bb - 5 && rr - bb > 25) wood++
+                // 米色盘/木板：G 高
+                if (rr > 170 && gg > 130 && rr > gg && gg >= bb - 15) wood++
                 n++
             }
         }
-        return n > 0 && wood * 100 / n >= 78
+        return n > 0 && wood * 100 / n >= 82
     }
 
     /**
@@ -125,12 +126,20 @@ class TemplatePieceReader(
     private fun loadTemplates(ctx: Context): Map<String, Bitmap> {
         val codes = listOf("wa", "wb", "wc", "wk", "wn", "wp", "wr", "ba", "bb", "bc", "bk", "bn", "bp", "br")
         val map = mutableMapOf<String, Bitmap>()
+        // 优先实机截屏抽的模板（天天象棋皮肤）；缺的回退旧 webp
         for (code in codes) {
-            ctx.assets.open("pieces/$code.webp").use { input ->
-                map[code] = BitmapFactory.decodeStream(input)
-            }
+            val live = openAsset(ctx, "pieces_live/$code.webp")
+                ?: openAsset(ctx, "pieces/$code.webp")
+                ?: continue
+            map[code] = live
         }
         return map
+    }
+
+    private fun openAsset(ctx: Context, path: String): Bitmap? = try {
+        ctx.assets.open(path).use { BitmapFactory.decodeStream(it) }
+    } catch (_: Throwable) {
+        null
     }
 
     companion object {

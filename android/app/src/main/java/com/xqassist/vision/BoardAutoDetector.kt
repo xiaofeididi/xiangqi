@@ -36,17 +36,29 @@ object BoardAutoDetector {
         val blobs = findPieceBlobs(frame, step, region)
         if (blobs.size < 6) return wood
 
+        // 去掉离主簇太远的离群点（如半截在盘外的子）
+        val cxList = blobs.map { it.cx }.sorted()
+        val cyList = blobs.map { it.cy }.sorted()
+        val medX = cxList[cxList.size / 2]
+        val medY = cyList[cyList.size / 2]
+        val filtered = blobs.filter {
+            val dx = abs(it.cx - medX)
+            val dy = abs(it.cy - medY)
+            dx <= medX / 2 + 200 && dy <= medY / 2 + 300
+        }
+        val use = if (filtered.size >= 6) filtered else blobs
+
         var minX = Int.MAX_VALUE
         var minY = Int.MAX_VALUE
         var maxX = Int.MIN_VALUE
         var maxY = Int.MIN_VALUE
-        for (b in blobs) {
+        for (b in use) {
             if (b.cx < minX) minX = b.cx
             if (b.cy < minY) minY = b.cy
             if (b.cx > maxX) maxX = b.cx
             if (b.cy > maxY) maxY = b.cy
         }
-        val cell = estimateCell(blobs) ?: ((maxX - minX).coerceAtLeast(1) / 8f)
+        val cell = estimateCell(use) ?: ((maxX - minX).coerceAtLeast(1) / 8f)
         val byPieces = BoardRect(
             left = (minX - cell).toInt().coerceAtLeast(0),
             top = (minY - cell).toInt().coerceAtLeast(0),
@@ -164,8 +176,8 @@ object BoardAutoDetector {
     }
 
     /**
-     * 棋子像素：红字 / 深灰字，且不是暖色木纹。
-     * 黑子字色常见 RGB≈120–180 灰，不能按 Pro 的 lum<60 卡。
+     * 天天象棋实机：红字约 (180-220, 40-90, 40-70)；黑字约 (55-70,55-70,55-70)；
+     * 棋盘/桌板木色 (200-240, 150-190, 100-140) 不能当成棋子。
      */
     fun isPiecePixel(pixel: Int): Boolean {
         val r = Color.red(pixel)
@@ -173,13 +185,13 @@ object BoardAutoDetector {
         val b = Color.blue(pixel)
         val maxC = maxOf(r, g, b)
         val minC = minOf(r, g, b)
-        // 木盘/背景：偏暖且亮
-        if (r > g && g >= b - 10 && r > 170 && r - b > 35) return false
-        // 红字：红明显高于绿蓝
-        if (r >= g + 35 && r >= b + 35 && r > 90 && r - minC > 40) return true
-        // 黑/灰字：低饱和、比木暗
-        if (maxC - minC < 45 && maxC in 40..195) return true
-        // 很暗也算
+        // 暖色木纹/米色盘：G 很高
+        if (r > 170 && g > 130 && r > g && g >= b - 15 && r - b > 15) return false
+        // 红字：G 明显低于米色木
+        if (r >= 140 && r >= g + 60 && r >= b + 60 && g <= 150) return true
+        // 黑字
+        if (maxC < 100 && maxC - minC < 35) return true
+        // 更暗也算
         if (maxC < 70) return true
         return false
     }
@@ -188,11 +200,12 @@ object BoardAutoDetector {
         val r = Color.red(pixel)
         val g = Color.green(pixel)
         val b = Color.blue(pixel)
-        if (r < 120 || r > 240) return false
-        if (g < 90 || g > 210) return false
-        if (b < 60 || b > 180) return false
-        if (r - b < 30) return false
-        if (r - g < 10) return false
+        // 天天象棋浅色棋盘：偏亮米色，不是深棕桌板
+        if (r < 180 || r > 250) return false
+        if (g < 140 || g > 220) return false
+        if (b < 90 || b > 180) return false
+        if (r - b < 25) return false
+        if (r - g < 8) return false
         return true
     }
 }
