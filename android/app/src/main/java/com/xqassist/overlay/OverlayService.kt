@@ -32,6 +32,7 @@ import com.xqassist.core.Quad
 import com.xqassist.engine.EngineHolder
 import com.xqassist.engine.UcciEngine
 import com.xqassist.vision.TemplatePieceReader
+import com.xqassist.vision.YoloDetector
 import java.util.concurrent.atomic.AtomicBoolean
 
 interface OverlayDisplay {
@@ -143,6 +144,9 @@ class OverlayService : Service(), OverlayDisplay {
             ConnectSession.attach(applicationContext)
             ConnectSession.provideEngine(engine)
             ConnectSession.provideReader(reader)
+            if (!YoloDetector.isReady) {
+                ensureYolo()
+            }
             if (ConnectSession.isRunning) {
                 ConnectSession.stop()
                 refreshButtons()
@@ -258,11 +262,24 @@ class OverlayService : Service(), OverlayDisplay {
 
         buildUi()
         ensureEngine()
+        ensureYolo()
         refreshButtons()
         updateControls(searchDepth, thinkSec)
         updateInfo("", "引擎启动中", ConnectSession.lastMessage.ifBlank { "待命" })
         updateOpacity(1f)
         setStatus(if (ConnectSession.boardRect == null) "未校准，分析时自动找盘" else "棋盘范围已就绪")
+    }
+
+    private fun ensureYolo() {
+        Thread {
+            val ok = YoloDetector.init(applicationContext)
+            mainHandler.post {
+                setStatus(
+                    if (ok) "YOLO 就绪"
+                    else "YOLO 失败:${YoloDetector.lastError.ifBlank { "?" }}"
+                )
+            }
+        }.start()
     }
 
     /** 前台通知：Activity 被杀后 Service 与连线分析仍存活 */

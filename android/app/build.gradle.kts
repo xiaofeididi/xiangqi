@@ -11,10 +11,17 @@ android {
         applicationId = "com.xqassist"
         minSdk = 26
         targetSdk = 28
-        versionCode = 68
-        versionName = "0.2.68"
-        // engine binary is arm64 only
-        ndk { abiFilters.add("arm64-v8a") }
+        versionCode = 69
+        versionName = "0.2.69"
+        ndk {
+            abiFilters.add("arm64-v8a")
+        }
+        externalNativeBuild {
+            cmake {
+                cppFlags += listOf("-std=c++17", "-fno-rtti")
+                arguments += listOf("-DANDROID_STL=c++_shared")
+            }
+        }
     }
 
     buildTypes {
@@ -25,7 +32,14 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    packaging { jniLibs { useLegacyPackaging = true } }
+    packaging {
+        jniLibs { useLegacyPackaging = true }
+    }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
+    }
     buildFeatures { viewBinding = true }
 }
 

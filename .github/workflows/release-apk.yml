@@ -25,6 +25,11 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Install NDK and CMake
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "ndk;26.1.10909125" "cmake;3.22.1" >/dev/null
+
       - name: Build debug APK
         working-directory: android
         run: |
@@ -56,11 +61,9 @@ jobs:
           body: |
             xq-assist auto build.
 
-            - Local play / browse
-            - Pikafish hint
+            - Extracted Pro YOLO (param+bin) via official NCNN
             - Overlay connect analysis
-            - Live templates + lattice board fit
-            SHA-256: ${{ steps.sha256.outputs.apk_sha256 }}
+            - SHA-256: ${{ steps.sha256.outputs.apk_sha256 }}
           files: android/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Create snapshot Release
