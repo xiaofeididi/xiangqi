@@ -54,17 +54,12 @@ jobs:
           tag_name: ${{ steps.version.outputs.version }}
           name: xq-assist ${{ steps.version.outputs.version }}
           body: |
-            xq-assist 自动构建的中国象棋助手 APK（v0.2.62）。
-
+            xq-assist 自动构建的中国象棋助�?APK（v0.2.62）�?
             - 本地人机对练 / 棋谱浏览
-            - 皮卡鱼最优着法提示
-            - 悬浮窗自持连线分析（修复打开即闪退：YOLO so 不再在启动时加载）
-            - 模板格点识别；YOLO 可选，需显式 init
-            - 可选自动走子（无障碍，Pro 坐标方案）
-            - 云库开局查询
+            - 皮卡鱼最优着法提�?            - 悬浮窗自持连线分析（修复打开即闪退：YOLO so 不再在启动时加载�?            - 模板格点识别；YOLO 可选，需显式 init
+            - 可选自动走子（无障碍，Pro 坐标方案�?            - 云库开局查询
 
-            下载说明：请先登录 GitHub 再下载。完整 APK 约 57MB；下载不完整会得到错误页，安装器可能提示 package is null。SHA-256：${{ steps.sha256.outputs.apk_sha256 }}。
-          files: android/app/build/outputs/apk/debug/app-debug.apk
+            下载说明：请先登�?GitHub 再下载。完�?APK �?57MB；下载不完整会得到错误页，安装器可能提示 package is null。SHA-256�?{{ steps.sha256.outputs.apk_sha256 }}�?          files: android/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Create snapshot Release
         if: github.ref == 'refs/heads/main'
@@ -73,7 +68,5 @@ jobs:
           tag_name: ${{ steps.snapshot.outputs.version }}
           name: xq-assist 最新测试版
           body: |
-            这是 main 分支的最新自动构建。
-
-            正式版本发布后，请优先下载正式 Release。
-          files: android/app/build/outputs/apk/debug/app-debug.apk
+            这是 main 分支的最新自动构建�?
+            正式版本发布后，请优先下载正�?Release�?          files: android/app/build/outputs/apk/debug/app-debug.apk
