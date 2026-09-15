@@ -369,14 +369,14 @@ class OverlayService : Service(), OverlayDisplay {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3))
             background = GradientDrawable().apply {
                 setColor(0xFF3B3A3C.toInt())
-                cornerRadius = dp(1.5f)
+                cornerRadius = 1.5f * resources.displayMetrics.density
             }
         }
         scoreBarFill = View(this).apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.5f)
             background = GradientDrawable().apply {
                 setColor(0xFFE752C8.toInt())
-                cornerRadius = dp(1.5f)
+                cornerRadius = 1.5f * resources.displayMetrics.density
             }
         }
         barWrap.addView(scoreBarFill!!)
