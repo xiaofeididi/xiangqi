@@ -34,6 +34,9 @@ import com.xqassist.capture.ScreenHelper
 import com.xqassist.core.Notation
 import com.xqassist.connection.ConnectSession
 import com.xqassist.connection.LiveLinkService
+import com.xqassist.book.BookManager
+import com.xqassist.book.CloudFileInfo
+import com.xqassist.book.ProCloud
 import com.xqassist.engine.CloudBook
 import com.xqassist.engine.BookMove
 import com.xqassist.engine.EngineHolder
@@ -499,12 +502,236 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildEnginePage(toPx: (Int) -> Int) {
-        // 开关统一放在设置页，首页只保留引擎分析结果
         enginePage.removeAllViews()
+        val engDir = java.io.File(filesDir, "engine").apply { mkdirs() }
+        val downloaded = engDir.listFiles { f -> f.isDirectory || f.canExecute() }?.map { it.name } ?: emptyList()
+
+        enginePage.addView(TextView(this).apply {
+            text = "引擎：内置皮卡鱼" + if (EngineHolder.engine?.isReady == true) "（运行中）" else "（启动中…）"
+            textSize = 14f
+            setPadding(0, 6, 0, 4)
+        })
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, toPx(4), 0, toPx(4))
+        }
+        row.addView(pageActionButton("下载引擎") { showEngineDownloadDialog() })
+        row.addView(pageActionButton("刷新") { buildEnginePage(toPx) })
+        enginePage.addView(row)
+
+        if (downloaded.isEmpty()) {
+            enginePage.addView(TextView(this).apply {
+                text = "暂无已下载引擎。可从 Pro 列表下载皮卡鱼到本地。"
+                textSize = 12f
+                setTextColor(Color.parseColor("#777777"))
+                setPadding(0, toPx(6), 0, 0)
+            })
+        } else {
+            enginePage.addView(TextView(this).apply {
+                text = "本地引擎："
+                textSize = 12f
+                setPadding(0, toPx(6), 0, toPx(2))
+            })
+            downloaded.forEach { name ->
+                enginePage.addView(TextView(this).apply {
+                    text = "· $name"
+                    textSize = 14f
+                    setPadding(0, toPx(6), 0, toPx(6))
+                })
+            }
+            enginePage.addView(TextView(this).apply {
+                text = "下载完成后重启助手加载新引擎。"
+                textSize = 11f
+                setTextColor(Color.parseColor("#888888"))
+            })
+        }
     }
 
     private fun buildOpeningPage(toPx: (Int) -> Int) {
         openingPage.removeAllViews()
+        BookManager.loadPrefs(this)
+        val locals = BookManager.listLocal(this)
+
+        openingPage.addView(TextView(this).apply {
+            text = "当前开局库：" + BookManager.summary() + "（只读，分析时可切换）"
+            textSize = 14f
+            setPadding(0, 6, 0, 4)
+        })
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, toPx(4), 0, toPx(4))
+        }
+        row.addView(pageActionButton("云库") {
+            BookManager.useCloud(this)
+            BookManager.clearHit()
+            buildOpeningPage(toPx)
+            renderOpeningPage()
+            toast("已切换云库")
+        })
+        row.addView(pageActionButton("下载开局库") { showBookDownloadDialog(toPx) })
+        row.addView(pageActionButton("刷新") {
+            buildOpeningPage(toPx)
+            renderOpeningPage()
+        })
+        openingPage.addView(row)
+
+        if (locals.isEmpty()) {
+            openingPage.addView(TextView(this).apply {
+                text = "还没有本地 .obk。点「下载开局库」从 Pro 列表获取。"
+                textSize = 12f
+                setTextColor(Color.parseColor("#777777"))
+                setPadding(0, toPx(6), 0, 0)
+            })
+        } else {
+            openingPage.addView(TextView(this).apply {
+                text = "本地开局库（点击切换）："
+                textSize = 12f
+                setPadding(0, toPx(6), 0, toPx(2))
+            })
+            locals.forEach { file ->
+                val active = BookManager.mode == 1 && BookManager.bookName == file.name
+                openingPage.addView(TextView(this).apply {
+                    text = (if (active) "★ " else "· ") + file.name + "  " + (file.length() / 1024) + "KB"
+                    textSize = 14f
+                    setTextColor(if (active) Color.parseColor("#0B4E8C") else Color.parseColor("#333333"))
+                    setPadding(0, toPx(8), 0, toPx(8))
+                    setOnClickListener {
+                        if (BookManager.openLocal(this@MainActivity, file.name)) {
+                            BookManager.clearHit()
+                            buildOpeningPage(toPx)
+                            renderOpeningPage()
+                            toast("已切换 " + file.name)
+                        } else {
+                            toast("打开失败 " + file.name)
+                        }
+                    }
+                })
+            }
+        }
+    }
+
+    private fun pageActionButton(label: String, action: () -> Unit): Button = Button(this).apply {
+        text = label
+        textSize = 12f
+        isAllCaps = false
+        includeFontPadding = false
+        setPadding(dpToPx(10), dpToPx(6), dpToPx(10), dpToPx(6))
+        setOnClickListener { action() }
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { marginEnd = dpToPx(6) }
+    }
+
+    private fun toast(msg: String) {
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showBookDownloadDialog(toPx: (Int) -> Int) {
+        Toast.makeText(this, "正在获取开局库列表…", Toast.LENGTH_SHORT).show()
+        Thread {
+            try {
+                val books = ProCloud.fetchList("openBook")
+                runOnUiThread {
+                    if (books.isEmpty()) {
+                        toast("列表为空")
+                        return@runOnUiThread
+                    }
+                    val labels = books.map { "${it.name}  (${it.size / 1024}KB)" }.toTypedArray()
+                    AlertDialog.Builder(this)
+                        .setTitle("下载开局库")
+                        .setItems(labels) { _, which ->
+                            downloadCloudFile(books[which], BookManager.booksDir(this)) { ok, name ->
+                                runOnUiThread {
+                                    if (ok) {
+                                        BookManager.openLocal(this, name)
+                                        BookManager.clearHit()
+                                        buildOpeningPage(toPx)
+                                        renderOpeningPage()
+                                        toast("已下载并切换 $name")
+                                    } else {
+                                        toast("下载失败")
+                                    }
+                                }
+                            }
+                        }
+                        .setNegativeButton("取消", null)
+                        .show()
+                }
+            } catch (t: Throwable) {
+                runOnUiThread { toast("列表失败：${t.message}") }
+            }
+        }.start()
+    }
+
+    private fun showEngineDownloadDialog() {
+        Toast.makeText(this, "正在获取引擎列表…", Toast.LENGTH_SHORT).show()
+        Thread {
+            try {
+                val engines = ProCloud.fetchList("engine")
+                // 按引擎名分组
+                val grouped = engines.groupBy { it.name }
+                runOnUiThread {
+                    if (grouped.isEmpty()) {
+                        toast("列表为空")
+                        return@runOnUiThread
+                    }
+                    val names = grouped.keys.toTypedArray()
+                    AlertDialog.Builder(this)
+                        .setTitle("下载引擎（含 NNUE，体积较大）")
+                        .setItems(names) { _, which ->
+                            val name = names[which]
+                            val files = grouped[name] ?: return@setItems
+                            val dir = java.io.File(java.io.File(filesDir, "engine"), name).apply { mkdirs() }
+                            toast("开始下载 $name …")
+                            Thread {
+                                var ok = true
+                                files.forEach { sub ->
+                                    val dest = java.io.File(dir, sub.fileName)
+                                    if (!ProCloud.download(sub.url, dest)) ok = false
+                                }
+                                runOnUiThread {
+                                    if (ok) {
+                                        makeExec(dir)
+                                        toast("引擎下载完成：$name（重启后生效）")
+                                        buildEnginePage { v -> (v * resources.displayMetrics.density).toInt() }
+                                    } else {
+                                        toast("引擎下载失败")
+                                    }
+                                }
+                            }.start()
+                        }
+                        .setNegativeButton("取消", null)
+                        .show()
+                }
+            } catch (t: Throwable) {
+                runOnUiThread { toast("列表失败：${t.message}") }
+            }
+        }.start()
+    }
+
+    private fun makeExec(dir: java.io.File) {
+        dir.listFiles()?.forEach { f ->
+            if (f.isFile) f.setExecutable(true, false)
+        }
+    }
+
+    private fun downloadCloudFile(
+        info: CloudFileInfo,
+        destDir: java.io.File,
+        onDone: (Boolean, String) -> Unit,
+    ) {
+        destDir.mkdirs()
+        val dest = java.io.File(destDir, info.fileName)
+        toast("下载 ${info.fileName} …")
+        Thread {
+            val ok = ProCloud.download(info.url, dest)
+            onDone(ok, info.fileName)
+        }.start()
     }
 
     private fun buildSettingsPage(toPx: (Int) -> Int) {
