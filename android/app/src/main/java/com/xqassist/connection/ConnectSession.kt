@@ -367,10 +367,11 @@ object ConnectSession {
             return
         }
 
-        // 开局库：本地优先；云库仅开局子多时查，避免中局反复打网
+        // 开局库：启用时本地优先；云库仅开局子多时查
         val bookHits = withContext(Dispatchers.IO) {
             try {
                 val ctx = appContext ?: return@withContext emptyList()
+                if (!BookManager.enabled) return@withContext emptyList()
                 val localOk = BookManager.mode == 1 && BookManager.bookName.isNotBlank()
                 if (localOk || pieceCount >= 26) {
                     BookManager.query(ctx, board)

@@ -473,19 +473,19 @@ class MainActivity : AppCompatActivity() {
         pages.addView(gamePage)
         pages.addView(settingsScroll)
 
-        // body 把导航和棋盘包在一层，避免高度分配把导航压扁
+        // 棋盘在上，导航（开局/后退/前进/终局）在下
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         }
-        body.addView(navBar, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-        ))
         body.addView(boardBox, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             0,
             1f,
+        ))
+        body.addView(navBar, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
         ))
 
         root.addView(toolbar, LinearLayout.LayoutParams(
@@ -503,115 +503,128 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildEnginePage(toPx: (Int) -> Int) {
         enginePage.removeAllViews()
-        val engDir = java.io.File(filesDir, "engine").apply { mkdirs() }
-        val downloaded = engDir.listFiles { f -> f.isDirectory || f.canExecute() }?.map { it.name } ?: emptyList()
-
         enginePage.addView(TextView(this).apply {
-            text = "引擎：内置皮卡鱼" + if (EngineHolder.engine?.isReady == true) "（运行中）" else "（启动中…）"
-            textSize = 14f
-            setPadding(0, 6, 0, 4)
+            text = "引擎"
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, 4, 0, 2)
         })
-
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, toPx(4), 0, toPx(4))
-        }
-        row.addView(pageActionButton("下载引擎") { showEngineDownloadDialog() })
-        row.addView(pageActionButton("刷新") { buildEnginePage(toPx) })
-        enginePage.addView(row)
-
-        if (downloaded.isEmpty()) {
-            enginePage.addView(TextView(this).apply {
-                text = "暂无已下载引擎。可从 Pro 列表下载皮卡鱼到本地。"
-                textSize = 12f
-                setTextColor(Color.parseColor("#777777"))
-                setPadding(0, toPx(6), 0, 0)
-            })
-        } else {
-            enginePage.addView(TextView(this).apply {
-                text = "本地引擎："
-                textSize = 12f
-                setPadding(0, toPx(6), 0, toPx(2))
-            })
-            downloaded.forEach { name ->
-                enginePage.addView(TextView(this).apply {
-                    text = "· $name"
-                    textSize = 14f
-                    setPadding(0, toPx(6), 0, toPx(6))
-                })
-            }
-            enginePage.addView(TextView(this).apply {
-                text = "下载完成后重启助手加载新引擎。"
-                textSize = 11f
-                setTextColor(Color.parseColor("#888888"))
-            })
-        }
+        enginePage.addView(TextView(this).apply {
+            text = if (EngineHolder.engine?.isReady == true) "内置皮卡鱼 · 运行中" else "内置皮卡鱼 · 启动中…"
+            textSize = 14f
+            setPadding(0, 2, 0, 6)
+        })
+        // 分析结果由 renderEnginePage 填充
+        enginePage.addView(TextView(this).apply {
+            tag = "eng_best"
+            text = if (lastResult.bestmove.isBlank()) "—"
+            else try {
+                Notation.moveToChinese(controller.displayPos, lastResult.bestmove) + "  " + scoreTextFor(lastResult)
+            } catch (_: Throwable) { lastResult.bestmove }
+            textSize = 16f
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, 4, 0, 4)
+        })
+        enginePage.addView(TextView(this).apply {
+            tag = "eng_pv"
+            text = "PV：" + pvChinese(lastResult.pv)
+            textSize = 12f
+            setTextColor(Color.parseColor("#555555"))
+        })
+        enginePage.addView(TextView(this).apply {
+            text = "引擎下载 / 切换 → 设置页"
+            textSize = 11f
+            setTextColor(Color.parseColor("#888888"))
+            setPadding(0, toPx(8), 0, 0)
+        })
     }
 
     private fun buildOpeningPage(toPx: (Int) -> Int) {
         openingPage.removeAllViews()
         BookManager.loadPrefs(this)
-        val locals = BookManager.listLocal(this)
-
-        openingPage.addView(TextView(this).apply {
-            text = "当前开局库：" + BookManager.summary() + "（只读，分析时可切换）"
-            textSize = 14f
-            setPadding(0, 6, 0, 4)
-        })
+        val locals = BookManager.listLocal(this).map { it.name }
 
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, toPx(4), 0, toPx(4))
         }
-        row.addView(pageActionButton("云库") {
-            BookManager.useCloud(this)
-            BookManager.clearHit()
-            buildOpeningPage(toPx)
-            renderOpeningPage()
-            toast("已切换云库")
+        row.addView(TextView(this).apply {
+            text = "开局库"
+            textSize = 12f
+            setTextColor(Color.parseColor("#666666"))
+            layoutParams = LinearLayout.LayoutParams(toPx(56), ViewGroup.LayoutParams.WRAP_CONTENT)
         })
-        row.addView(pageActionButton("下载开局库") { showBookDownloadDialog(toPx) })
-        row.addView(pageActionButton("刷新") {
-            buildOpeningPage(toPx)
-            renderOpeningPage()
-        })
-        openingPage.addView(row)
-
-        if (locals.isEmpty()) {
-            openingPage.addView(TextView(this).apply {
-                text = "还没有本地 .obk。点「下载开局库」从 Pro 列表获取。"
-                textSize = 12f
-                setTextColor(Color.parseColor("#777777"))
-                setPadding(0, toPx(6), 0, 0)
-            })
-        } else {
-            openingPage.addView(TextView(this).apply {
-                text = "本地开局库（点击切换）："
-                textSize = 12f
-                setPadding(0, toPx(6), 0, toPx(2))
-            })
-            locals.forEach { file ->
-                val active = BookManager.mode == 1 && BookManager.bookName == file.name
-                openingPage.addView(TextView(this).apply {
-                    text = (if (active) "★ " else "· ") + file.name + "  " + (file.length() / 1024) + "KB"
-                    textSize = 14f
-                    setTextColor(if (active) Color.parseColor("#0B4E8C") else Color.parseColor("#333333"))
-                    setPadding(0, toPx(8), 0, toPx(8))
-                    setOnClickListener {
-                        if (BookManager.openLocal(this@MainActivity, file.name)) {
-                            BookManager.clearHit()
-                            buildOpeningPage(toPx)
-                            renderOpeningPage()
-                            toast("已切换 " + file.name)
-                        } else {
-                            toast("打开失败 " + file.name)
-                        }
+        val labels = mutableListOf("云库 chessdb")
+        labels += locals.map { "本地 · $it" }
+        labels += "… 下载（去设置）"
+        val spin = Spinner(this).apply {
+            adapter = android.widget.ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                labels,
+            )
+            val sel = when {
+                BookManager.mode == 0 -> 0
+                else -> (labels.indexOfFirst { it.endsWith(BookManager.bookName) }).coerceAtLeast(0)
+            }
+            setSelection(sel)
+            onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    if (position == labels.lastIndex) {
+                        switchTab(TAB_SETTINGS)
+                        toast("开局库下载在设置页")
+                        return
                     }
-                })
+                    if (position == 0) {
+                        BookManager.useCloud(this@MainActivity)
+                    } else {
+                        val name = locals[position - 1]
+                        BookManager.openLocal(this@MainActivity, name)
+                    }
+                    BookManager.clearHit()
+                    renderOpeningPage()
+                    toast("已切换 " + BookManager.summary())
+                }
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
             }
         }
+        row.addView(spin, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        openingPage.addView(row)
+
+        openingPage.addView(TextView(this).apply {
+            tag = "book_meta"
+            text = BookManager.summary() + " · 只读 · " + (if (BookManager.enabled) "启用中" else "未启用")
+            textSize = 11f
+            setTextColor(Color.parseColor("#888888"))
+            setPadding(toPx(56), 2, 0, 6)
+        })
+        val enableRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(toPx(56), 0, 0, 4)
+        }
+        enableRow.addView(Button(this).apply {
+            text = if (BookManager.enabled) "库·开" else "启用开局库"
+            textSize = 12f
+            isAllCaps = false
+            setOnClickListener {
+                BookManager.enabled = !BookManager.enabled
+                BookManager.savePrefs(this@MainActivity)
+                BookManager.clearHit()
+                buildOpeningPage(toPx)
+                renderOpeningPage()
+                toast(if (BookManager.enabled) "启用开局库" else "关闭开局库")
+            }
+        })
+        openingPage.addView(enableRow)
+
+        val movesBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            tag = "book_moves"
+            setPadding(0, 4, 0, 0)
+        }
+        openingPage.addView(movesBox)
+        renderOpeningPage()
     }
 
     private fun pageActionButton(label: String, action: () -> Unit): Button = Button(this).apply {
@@ -795,9 +808,63 @@ class MainActivity : AppCompatActivity() {
         })
         settingsPage.addView(toggles)
 
+        // —— 开局库下载 / 管理 ——
+        settingsPage.addView(sectionTitle("开局库下载 / 管理", toPx))
+        val bookRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, toPx(4), 0, toPx(4))
+        }
+        bookRow.addView(actionButton("下载开局库") { showBookDownloadDialog(toPx) })
+        bookRow.addView(actionButton("打开目录") {
+            val d = BookManager.booksDir(this)
+            toast("目录：${d.absolutePath}")
+        })
+        settingsPage.addView(bookRow)
+        settingsPage.addView(TextView(this).apply {
+            text = "当前：" + BookManager.summary() + " · " + (if (BookManager.enabled) "启用" else "未启用")
+            textSize = 12f
+            setTextColor(Color.parseColor("#666666"))
+        })
+
+        // —— 引擎下载 / 切换 ——
+        settingsPage.addView(sectionTitle("引擎下载 / 切换", toPx))
+        val engDir = java.io.File(filesDir, "engine").apply { mkdirs() }
+        val engNames = mutableListOf("内置皮卡鱼")
+        engDir.listFiles { f -> f.isDirectory }?.forEach { engNames += it.name }
+        val engRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        engRow.addView(TextView(this).apply {
+            text = "当前引擎"
+            textSize = 12f
+            setTextColor(Color.parseColor("#666666"))
+            layoutParams = LinearLayout.LayoutParams(toPx(64), ViewGroup.LayoutParams.WRAP_CONTENT)
+        })
+        val engSpin = Spinner(this).apply {
+            adapter = android.widget.ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                engNames + "… 下载引擎",
+            )
+            onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    if (position == engNames.size) showEngineDownloadDialog()
+                }
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+            }
+        }
+        engRow.addView(engSpin, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        settingsPage.addView(engRow)
+        settingsPage.addView(TextView(this).apply {
+            text = "下载写入本地；切换后重启助手加载 NNUE。"
+            textSize = 11f
+            setTextColor(Color.parseColor("#888888"))
+        })
+
         val actionRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, toPx(4), 0, 0)
+            setPadding(0, toPx(8), 0, 0)
         }
         actionRow.addView(actionButton("悬浮窗") { toggleOverlay() })
         actionRow.addView(actionButton("开发者模式") {
@@ -820,6 +887,14 @@ class MainActivity : AppCompatActivity() {
             labRow.addView(actionButton("识别测试") { startScreenRecognition() })
             settingsPage.addView(labRow)
         }
+    }
+
+    private fun sectionTitle(text: String, toPx: (Int) -> Int): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 13f
+        setTypeface(typeface, Typeface.BOLD)
+        setTextColor(Color.parseColor("#0B4E8C"))
+        setPadding(0, toPx(10), 0, toPx(2))
     }
 
     private fun choiceButton(label: String, active: Boolean, action: () -> Unit): Button = Button(this).apply {
@@ -888,7 +963,11 @@ class MainActivity : AppCompatActivity() {
         openingScroll.visibility = if (tab == TAB_OPENING) View.VISIBLE else View.GONE
         gamePage.visibility = if (tab == TAB_GAME) View.VISIBLE else View.GONE
         settingsScroll.visibility = if (tab == TAB_SETTINGS) View.VISIBLE else View.GONE
-        if (tab == TAB_OPENING && displayCloud) queryCloud()
+        if (tab == TAB_OPENING) {
+            if (displayCloud) queryCloud()
+            renderOpeningPage()
+        }
+        if (tab == TAB_GAME) renderGamePage()
         renderInfo()
     }
 
@@ -1193,104 +1272,207 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderOpeningPage() {
-        openingPage.removeAllViews()
-        buildOpeningPage { value -> (value * resources.displayMetrics.density).toInt() }
-        val header = TextView(this).apply {
-            text = cloudMessage
-            textSize = 14f
-            setPadding(0, 6, 0, 4)
-        }
-        openingPage.addView(header)
-        cloudMoves.sortedWith(compareByDescending<BookMove> { it.rank }.thenByDescending { it.score }).forEach { move ->
-            val cn = Notation.moveToChinese(controller.displayPos, move.move)
-            val row = TextView(this).apply {
-                textSize = 16f
-                text = "$cn\t${move.rank}\t${String.format("%.2f", move.winrate)}%\t!(${move.score})"
-                setPadding(0, 12, 0, 12)
-                setOnClickListener {
-                    playCloudMove(move.move)
+        val box = openingPage.findViewWithTag<LinearLayout>("book_moves") ?: return
+        val meta = openingPage.findViewWithTag<TextView>("book_meta")
+        box.removeAllViews()
+        meta?.text = BookManager.summary() + " · 只读 · " + (if (BookManager.enabled) "启用中" else "未启用")
+        box.addView(TextView(this).apply {
+            text = "当前局面招法…"
+            textSize = 12f
+            setTextColor(Color.parseColor("#888888"))
+        })
+        val pos = controller.displayPos
+        Thread {
+            val hits = try {
+                if (BookManager.enabled) {
+                    kotlinx.coroutines.runBlocking { BookManager.query(this@MainActivity, pos) }
+                } else {
+                    emptyList()
+                }
+            } catch (_: Throwable) {
+                emptyList()
+            }
+            runOnUiThread {
+                box.removeAllViews()
+                if (hits.isEmpty()) {
+                    // 回退显示云库缓存（若有）
+                    val fallback = cloudMoves.sortedWith(
+                        compareByDescending<BookMove> { it.rank }.thenByDescending { it.score },
+                    )
+                    if (fallback.isEmpty()) {
+                        box.addView(TextView(this).apply {
+                            text = "当前局面无开局库数据"
+                            textSize = 13f
+                            setTextColor(Color.parseColor("#777777"))
+                        })
+                        return@runOnUiThread
+                    }
+                    fallback.forEachIndexed { i, m ->
+                        val cn = try { Notation.moveToChinese(pos, m.move) } catch (_: Throwable) { m.move }
+                        box.addView(bookMoveRow(cn, "胜${"%.1f".format(m.winrate)}% · 分${m.score}", i == 0) {
+                            playCloudMove(m.move)
+                        })
+                    }
+                    return@runOnUiThread
+                }
+                hits.forEachIndexed { i, h ->
+                    box.addView(bookMoveRow(
+                        h.chinese(pos),
+                        "分${h.score} · 胜${"%.0f".format(h.winRate)}% · ${h.source}",
+                        i == 0,
+                    ) {
+                        controller.hintFromIccs(h.move)
+                        refreshUi()
+                        toast("已标出 " + h.chinese(pos))
+                    })
                 }
             }
-            openingPage.addView(row)
+        }.start()
+    }
+
+    private fun bookMoveRow(cn: String, sub: String, best: Boolean, click: () -> Unit): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dpToPx(8), 0, dpToPx(8))
+            setOnClickListener { click() }
         }
+        row.addView(TextView(this).apply {
+            text = (if (best) "★ " else "") + cn
+            textSize = 15f
+            setTextColor(if (best) Color.parseColor("#0B4E8C") else Color.parseColor("#333333"))
+            setTypeface(typeface, if (best) Typeface.BOLD else Typeface.NORMAL)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        row.addView(TextView(this).apply {
+            text = sub
+            textSize = 11f
+            setTextColor(Color.parseColor("#777777"))
+        })
+        return row
     }
 
     private fun dpToPx(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private fun renderGamePage() {
-        movesListContainer.removeAllViews()
+        val parent = gamePage
+        parent.removeAllViews()
+        val split = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        }
+        val nav = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.1f)
+            setBackgroundColor(Color.WHITE)
+        }
+        val navScroll = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.1f)
+            setBackgroundColor(Color.WHITE)
+            addView(nav)
+        }
+        val side = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            setBackgroundColor(Color.WHITE)
+            setPadding(dpToPx(10), dpToPx(8), dpToPx(10), dpToPx(8))
+        }
+        split.addView(navScroll)
+        split.addView(side)
+        parent.addView(split)
+
+        side.addView(TextView(this).apply {
+            text = "着法注释 / 变招"
+            textSize = 12f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.parseColor("#0B4E8C"))
+            setPadding(0, 0, 0, dpToPx(6))
+        })
+        val sideBody = TextView(this).apply {
+            textSize = 13f
+            setTextColor(Color.parseColor("#333333"))
+            tag = "game_side"
+        }
+        side.addView(sideBody)
+
+        fun showSide(index: Int) {
+            val moves = controller.moves
+            if (index !in moves.indices) {
+                sideBody.text = "点击左侧着法查看注释。"
+                return
+            }
+            val pre = controller.preMovePos(index)
+            val cn = try { Notation.moveToChinese(pre, moves[index].iccs()) } catch (_: Throwable) { moves[index].iccs() }
+            val n = (index / 2) + 1
+            val mark = if (index % 2 == 0) "." else "…"
+            sideBody.text = "$n$mark $cn\n\n" + when {
+                index == moves.size - 1 -> "当前末着。可点引擎页看推荐，或点开局库看库着。"
+                else -> "主线着法。长按列表项或点「变」可开变招（视控制器支持）。"
+            }
+        }
+
         if (controller.activeVariation != null) {
-            val back = TextView(this).apply {
+            nav.addView(TextView(this).apply {
                 text = "← 返回主线"
                 textSize = 13f
                 setTextColor(Color.parseColor("#1B5E20"))
-                setPadding(0, this@MainActivity.dpToPx(4), 0, this@MainActivity.dpToPx(6))
-                setOnClickListener { controller.activateMainline(); refreshUi(); renderInfo(); renderGamePage() }
-            }
-            movesListContainer.addView(back)
+                setPadding(dpToPx(10), dpToPx(6), 0, dpToPx(6))
+                setOnClickListener {
+                    controller.activateMainline(); refreshUi(); renderInfo(); renderGamePage()
+                }
+            })
         }
         val moves = controller.moves
         if (moves.isEmpty()) {
-            val empty = TextView(this).apply {
+            nav.addView(TextView(this).apply {
                 text = "暂无棋谱"
                 textSize = 14f
                 setTextColor(Color.parseColor("#777777"))
-            }
-            movesListContainer.addView(empty)
+                setPadding(dpToPx(10), dpToPx(8), 0, 0)
+            })
+            showSide(-1)
             return
         }
+        val cur = if (controller.browseIndex >= 0) controller.browseIndex else moves.size - 1
         moves.forEachIndexed { index, move ->
             val pre = controller.preMovePos(index)
-            val label = Notation.moveToChinese(pre, move.iccs())
-            val atEnd = index == moves.size - 1 && controller.browseIndex == -1
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-            val step = TextView(this).apply {
-                text = ((index / 2) + 1).toString() + if (index % 2 == 0) ". " else "… "
-                textSize = 12f
-                setTextColor(Color.parseColor("#888888"))
-            }
-            val moveView = TextView(this).apply {
-                text = label
-                textSize = 15f
-                setTextColor(if (atEnd) Color.parseColor("#0B4E8C") else Color.parseColor("#333333"))
-                setPadding(0, this@MainActivity.dpToPx(8), this@MainActivity.dpToPx(4), this@MainActivity.dpToPx(8))
-            }
-            val branch = TextView(this).apply {
-                text = "变"
-                textSize = 10f
-                setTextColor(Color.WHITE)
-                setBackgroundColor(Color.parseColor("#D84315"))
-                setPadding(this@MainActivity.dpToPx(4), this@MainActivity.dpToPx(1), this@MainActivity.dpToPx(4), this@MainActivity.dpToPx(1))
-                visibility = if (controller.activeVariation != null && index == 0) View.VISIBLE else View.GONE
-            }
-            row.addView(step)
-            row.addView(moveView)
-            row.addView(branch)
-            row.setOnClickListener {
-                controller.browseTo(if (controller.browseIndex == index && controller.activeVariation != null) -1 else index)
-                refreshUi(); renderInfo(); renderGamePage()
-            }
-            movesListContainer.addView(row)
-        }
-        if (controller.variations.isNotEmpty() && controller.activeVariation == null) {
-            val head = TextView(this).apply {
-                text = "变招"
-                textSize = 13f
-                setTextColor(Color.parseColor("#B26A00"))
-                setPadding(0, this@MainActivity.dpToPx(12), 0, this@MainActivity.dpToPx(4))
-            }
-            movesListContainer.addView(head)
-            controller.variations.forEachIndexed { vi, branch ->
-                val row = TextView(this).apply {
-                    text = controller.variationNotation(branch)
-                    textSize = 14f
-                    setTextColor(Color.parseColor("#333333"))
-                    setPadding(0, this@MainActivity.dpToPx(5), 0, this@MainActivity.dpToPx(5))
-                    setOnClickListener { controller.activateVariation(vi); refreshUi(); renderInfo(); renderGamePage() }
+            val label = try { Notation.moveToChinese(pre, move.iccs()) } catch (_: Throwable) { move.iccs() }
+            val isCur = index == cur
+            val item = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setBackgroundColor(if (isCur) Color.parseColor("#E8F0FA") else Color.TRANSPARENT)
+                setPadding(dpToPx(10), dpToPx(8), dpToPx(8), dpToPx(8))
+                setOnClickListener {
+                    controller.browseTo(
+                        if (controller.browseIndex == index && controller.activeVariation != null) -1 else index,
+                    )
+                    refreshUi(); renderInfo(); renderGamePage()
                 }
-                movesListContainer.addView(row)
             }
+            item.addView(TextView(this).apply {
+                text = ((index / 2) + 1).toString() + if (index % 2 == 0) ". " else "… "
+                textSize = 11f
+                setTextColor(Color.parseColor("#999999"))
+            })
+            item.addView(TextView(this).apply {
+                text = label
+                textSize = 14f
+                setTextColor(if (isCur) Color.parseColor("#0B4E8C") else Color.parseColor("#333333"))
+                setTypeface(typeface, if (isCur) Typeface.BOLD else Typeface.NORMAL)
+            })
+            if (controller.activeVariation != null && index == 0) {
+                item.addView(TextView(this).apply {
+                    text = "变"
+                    textSize = 10f
+                    setTextColor(Color.WHITE)
+                    setBackgroundColor(Color.parseColor("#D84315"))
+                    setPadding(dpToPx(4), dpToPx(1), dpToPx(4), dpToPx(1))
+                })
+            }
+            nav.addView(item)
         }
+        showSide(cur)
     }
 
     private fun browseFirst() {

@@ -22,9 +22,11 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import com.xqassist.book.BookManager
@@ -35,11 +37,9 @@ import com.xqassist.connection.ConnectSession
 import com.xqassist.connection.LiveLinkService
 import com.xqassist.core.Notation
 import com.xqassist.core.Position
-import com.xqassist.core.Quad
 import com.xqassist.engine.EngineHolder
 import com.xqassist.engine.EngineResult
 import com.xqassist.engine.UcciEngine
-import com.xqassist.ui.MiniBoardView
 import com.xqassist.vision.TemplatePieceReader
 import com.xqassist.vision.YoloDetector
 import java.io.File
@@ -51,28 +51,27 @@ interface OverlayDisplay {
     fun updateInfo(cloud: String, engineSummary: String, engineDetail: String)
     fun updateOpacity(alpha: Float)
     fun updateConnect(autoOn: Boolean, delayMs: Int, sideLabel: String, running: Boolean, message: String)
-    fun updateMiniBoard(position: Position?, hint: Quad?, status: String)
 }
 
 /**
- * 悬浮窗：对齐 Pro 双窗口
- * 1) 控制条 MATCH_PARENT×WRAP：分析行（完整 PV 中文）+ 开局库行 + 分数条
- * 2) 迷你棋盘独立窗：默认 100dp×1.2，前 2 步箭头
+ * 悬浮窗 v0.5：
+ * - 无迷你棋盘
+ * - 标题仅 — / ×
+ * - 分析=开/关；出子=独立；分析循环不用深度/时间
+ * - 开局库行 +「启用库」
+ * - 深度/时间/透明为下拉
  */
 class OverlayService : Service(), OverlayDisplay {
 
     interface Actions {
         fun onLink()
-        fun onLinkLongPress()
         fun onAnalyze()
         fun onPlayMove()
-        fun onDepthChange(delta: Int)
-        fun onTimeChange(delta: Int)
-        fun onOpacityChange(delta: Int)
+        fun onDepthSelect(index: Int)
+        fun onTimeSelect(index: Int)
+        fun onOpacitySelect(index: Int)
         fun onCloseOverlay()
-        fun onAutoMoveToggle()
-        fun onSideToggle()
-        fun onCalibrate()
+        fun onBookEnableToggle()
     }
 
     companion object {
@@ -104,35 +103,35 @@ class OverlayService : Service(), OverlayDisplay {
     private var bookText: TextView? = null
     private var statusText: TextView? = null
     private var scoreBarFill: View? = null
-    private var depthText: TextView? = null
-    private var timeText: TextView? = null
-    private var opacityText: TextView? = null
     private var linkButton: Button? = null
     private var analyzeButton: Button? = null
     private var playButton: Button? = null
-
-    private var boardView: MiniBoardView? = null
-    private var boardRoot: LinearLayout? = null
-    private var boardParams: WindowManager.LayoutParams? = null
-    private var boardVisible = false
+    private var bookToggle: Button? = null
+    private var depthSpin: Spinner? = null
+    private var timeSpin: Spinner? = null
+    private var opacitySpin: Spinner? = null
+    private var limitHint: TextView? = null
 
     private var expanded = true
-    private var opacity = 1f
     private var startX = 0
     private var startY = 0
     private var initialX = 0
     private var initialY = 0
     private var initialWidth = 0
-    private var autoOn = false
-    private var searchDepth = 0
-    private var thinkSec = 3
+
+    private val depthLabels = listOf("深·不限", "深·8", "深·12", "深·16")
+    private val depthValues = listOf(0, 8, 12, 16)
+    private val timeLabels = listOf("时·1s", "时·3s", "时·5s", "时·10s")
+    private val timeValues = listOf(1, 3, 5, 10)
+    private val opacityLabels = listOf("透·100%", "透·85%", "透·70%")
+    private val opacityValues = listOf(1f, 0.85f, 0.7f)
 
     private val selfActions = object : Actions {
         override fun onLink() {
             if (LiveLinkService.isConnected) {
                 toast("已连接")
             } else {
-                toast("请在系统设置开启无障碍「象棋助手」")
+                toast("请开启无障碍「象棋助手」")
                 try {
                     startActivity(
                         Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
@@ -145,43 +144,28 @@ class OverlayService : Service(), OverlayDisplay {
             refreshButtons()
         }
 
-        override fun onLinkLongPress() {
-            if (LiveLinkService.isConnected) {
-                LiveLinkService.disconnect()
-                toast("连线已断开（长按）")
-            } else {
-                toast("未连接，无需断开")
-            }
-            refreshButtons()
-        }
-
         override fun onAnalyze() {
             ConnectSession.attach(applicationContext)
             ConnectSession.provideEngine(engine)
             ConnectSession.provideReader(reader)
             BookManager.loadPrefs(applicationContext)
-            if (!YoloDetector.isReady) {
-                ensureYolo()
-            }
+            if (!YoloDetector.isReady) ensureYolo()
             if (ConnectSession.isRunning) {
                 ConnectSession.stop()
                 refreshButtons()
                 return
             }
             if (!CaptureService.isRunning) {
-                setStatus("屏幕识别未开，请回助手重新授权截屏")
-                toast("屏幕识别未开，请回助手重新授权")
+                setStatus("屏幕识别未开，请回助手授权截屏")
+                toast("屏幕识别未开")
                 return
             }
             ConnectSession.useEngineLimits = false
             if (engine?.isReady != true) {
                 setStatus("引擎启动中…")
                 ensureEngine()
-                toast("引擎启动中，请稍后再试")
+                toast("引擎启动中")
                 return
-            }
-            if (!LiveLinkService.isConnected) {
-                toast("无障碍未开：仅分析，无法出子")
             }
             ConnectSession.start()
             refreshButtons()
@@ -193,46 +177,37 @@ class OverlayService : Service(), OverlayDisplay {
             ConnectSession.provideReader(reader)
             if (ConnectSession.isRunning || ConnectSession.lastFen.isNotBlank()) {
                 ConnectSession.useEngineLimits = true
-                ConnectSession.searchDepth = searchDepth
-                ConnectSession.thinkMs = thinkSec * 1000
+                val d = depthValues[depthSpin?.selectedItemPosition ?: 0]
+                val t = timeValues[timeSpin?.selectedItemPosition ?: 1]
+                ConnectSession.searchDepth = d
+                ConnectSession.thinkMs = t * 1000
                 ConnectSession.playBestNow { ok ->
                     mainHandler.post {
-                        toast(if (ok) "已按分析结果出子" else "出子失败：请检查无障碍/着法")
+                        toast(if (ok) "已出子" else "出子失败")
                         refreshButtons()
                     }
                 }
             } else {
-                setStatus("还没有识别局面，先点「分析」")
-                toast("还没有识别局面，先点「分析」")
+                setStatus("先点「分析」")
+                toast("还没有识别局面")
             }
         }
 
-        override fun onDepthChange(delta: Int) {
-            searchDepth = when {
-                delta < 0 -> 0
-                searchDepth <= 0 -> 6
-                else -> (searchDepth + delta).coerceIn(6, 18)
-            }
-            ConnectSession.searchDepth = searchDepth
-            updateControls(searchDepth, thinkSec)
-            setStatus(if (searchDepth == 0) "深度不限" else "深度 $searchDepth 层")
+        override fun onDepthSelect(index: Int) {
+            val d = depthValues.getOrElse(index) { 0 }
+            ConnectSession.searchDepth = d
+            toast(if (d == 0) "深度不限" else "深度 $d")
         }
 
-        override fun onTimeChange(delta: Int) {
-            if (delta < 0) thinkSec = (thinkSec - 1).coerceAtLeast(1)
-            else thinkSec = (thinkSec + 1).coerceAtMost(60)
-            ConnectSession.thinkMs = thinkSec * 1000
-            updateControls(searchDepth, thinkSec)
-            setStatus("思考时间 ${thinkSec} 秒")
+        override fun onTimeSelect(index: Int) {
+            val t = timeValues.getOrElse(index) { 3 }
+            ConnectSession.thinkMs = t * 1000
+            toast("时间 ${t}s")
         }
 
-        override fun onOpacityChange(delta: Int) {
-            val next = if (delta < 0) {
-                (opacity - 0.1f).coerceAtLeast(0.35f)
-            } else {
-                (opacity + 0.1f).coerceAtMost(1f)
-            }
-            updateOpacity(next)
+        override fun onOpacitySelect(index: Int) {
+            val a = opacityValues.getOrElse(index) { 1f }
+            updateOpacity(a)
         }
 
         override fun onCloseOverlay() {
@@ -240,23 +215,12 @@ class OverlayService : Service(), OverlayDisplay {
             stopSelf()
         }
 
-        override fun onAutoMoveToggle() {
-            ConnectSession.attach(applicationContext)
-            ConnectSession.setAutoMove(!ConnectSession.autoMoveOn)
-            autoOn = ConnectSession.autoMoveOn
-            toast(if (autoOn) "自动走已开启" else "自动走已关闭")
-            refreshButtons()
-        }
-
-        override fun onSideToggle() {
-            ConnectSession.attach(applicationContext)
-            ConnectSession.toggleSide()
-            toast("行棋方：${if (ConnectSession.sideToMove == "w") "红方" else "黑方"}")
-        }
-
-        override fun onCalibrate() {
-            setStatus("请回助手「识别测试」完成校准；无校准时会自动找盘")
-            toast("请回助手校准；无校准时会自动找盘")
+        override fun onBookEnableToggle() {
+            BookManager.enabled = !BookManager.enabled
+            BookManager.savePrefs(applicationContext)
+            BookManager.clearHit()
+            refreshBookLine()
+            toast(if (BookManager.enabled) "启用开局库：有库着优先走库" else "已关开局库")
         }
     }
 
@@ -267,20 +231,14 @@ class OverlayService : Service(), OverlayDisplay {
         actions = selfActions
         ConnectSession.attach(applicationContext)
         BookManager.loadPrefs(applicationContext)
-        autoOn = ConnectSession.autoMoveOn
-        searchDepth = ConnectSession.searchDepth
-        thinkSec = (ConnectSession.thinkMs / 1000).coerceAtLeast(1)
 
-        LiveLinkService.onConnectedChanged = {
-            mainHandler.post { refreshButtons() }
-        }
+        LiveLinkService.onConnectedChanged = { mainHandler.post { refreshButtons() } }
 
         buildUi()
         ensureEngine()
         refreshButtons()
-        updateControls(searchDepth, thinkSec)
         analysisText?.text = "引擎启动中…"
-        bookText?.text = "开局库：" + BookManager.summary()
+        bookText?.text = BookManager.summary()
         setStatus(if (ConnectSession.boardRect == null) "未校准，分析时自动找盘" else "棋盘范围已就绪")
     }
 
@@ -288,10 +246,7 @@ class OverlayService : Service(), OverlayDisplay {
         Thread {
             val ok = YoloDetector.init(applicationContext)
             mainHandler.post {
-                setStatus(
-                    if (ok) "YOLO 就绪"
-                    else "YOLO 失败:${YoloDetector.lastError.ifBlank { "?" }}"
-                )
+                setStatus(if (ok) "YOLO 就绪" else "YOLO 失败:${YoloDetector.lastError.ifBlank { "?" }}")
             }
         }.start()
     }
@@ -374,9 +329,6 @@ class OverlayService : Service(), OverlayDisplay {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
         }
         header.addView(title)
-        header.addView(miniButton("棋") { toggleBoard() })
-        header.addView(miniButton("库") { showBookDialog() })
-        header.addView(miniButton("下") { showDownloadDialog() })
         header.addView(miniButton("—") { setExpanded(false) })
         header.addView(miniButton("×") { selfActions.onCloseOverlay() })
         card.addView(header)
@@ -392,15 +344,22 @@ class OverlayService : Service(), OverlayDisplay {
         card.addView(buttons)
         card.addView(spacer(dp(4)))
 
-        val controls = LinearLayout(this).apply {
+        val ctrlRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
-        controls.addView(controlTile("深", "不限", 1.0f) { delta -> selfActions.onDepthChange(delta) })
-        controls.addView(controlTile("时", "3秒", 1.0f) { delta -> selfActions.onTimeChange(delta) })
-        controls.addView(controlTile("透明", "100%", 1.2f) { delta -> selfActions.onOpacityChange(delta) })
-        card.addView(controls)
-        card.addView(spacer(dp(4)))
+        depthSpin = spinner(depthLabels, 0).also { ctrlRow.addView(weighted(it, 1f)) }
+        timeSpin = spinner(timeLabels, 1).also { ctrlRow.addView(weighted(it, 1f)) }
+        opacitySpin = spinner(opacityLabels, 1).also { ctrlRow.addView(weighted(it, 1f)) }
+        card.addView(ctrlRow)
+
+        limitHint = TextView(this).apply {
+            text = "分析中：忽略深度/时间 · 点「出子」用设置算一着"
+            textSize = 10f
+            setTextColor(0x73FFFFFF.toInt())
+            setPadding(0, dp(2), 0, dp(4))
+        }
+        card.addView(limitHint!!)
 
         analysisText = TextView(this).apply {
             text = "皮卡鱼 —"
@@ -409,10 +368,6 @@ class OverlayService : Service(), OverlayDisplay {
             setTextColor(Color.WHITE)
             setLineSpacing(dp(2).toFloat(), 1.05f)
             maxLines = 4
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            )
         }
         card.addView(analysisText!!)
 
@@ -437,13 +392,31 @@ class OverlayService : Service(), OverlayDisplay {
         card.addView(barWrap)
         card.addView(spacer(dp(4)))
 
+        val bookRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
         bookText = TextView(this).apply {
-            text = "开局库：" + BookManager.summary()
+            text = BookManager.summary()
             textSize = 11.5f
             setTextColor(0xFF6AFFCD.toInt())
             maxLines = 2
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
-        card.addView(bookText!!)
+        bookToggle = Button(this).apply {
+            textSize = 10f
+            isAllCaps = false
+            includeFontPadding = false
+            minHeight = 0
+            minWidth = 0
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            setTextColor(Color.WHITE)
+            stateListAnimator = null
+            setOnClickListener { selfActions.onBookEnableToggle() }
+        }
+        bookRow.addView(bookText!!)
+        bookRow.addView(bookToggle!!)
+        card.addView(bookRow)
 
         statusText = TextView(this).apply {
             text = "待命"
@@ -457,7 +430,7 @@ class OverlayService : Service(), OverlayDisplay {
             text = "↘"
             textSize = 14f
             setTextColor(0xB3FFFFFF.toInt())
-            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            gravity = Gravity.END
             setPadding(0, dp(2), 0, 0)
         }
         card.addView(resize)
@@ -478,18 +451,15 @@ class OverlayService : Service(), OverlayDisplay {
         resize.setOnTouchListener { _, event -> resizeHandler(event, p, panel, metrics.widthPixels - dp(8)) }
 
         linkButton?.setOnClickListener { selfActions.onLink() }
-        linkButton?.setOnLongClickListener { selfActions.onLinkLongPress(); true }
         analyzeButton?.setOnClickListener { selfActions.onAnalyze() }
-        analyzeButton?.setOnLongClickListener { selfActions.onSideToggle(); true }
         playButton?.setOnClickListener { selfActions.onPlayMove() }
-        playButton?.setOnLongClickListener { selfActions.onAutoMoveToggle(); true }
 
         val miniView = TextView(this).apply {
-            text = "≡ 象棋"
+            text = "≡"
             textSize = 12f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setPadding(dp(9), dp(7), dp(9), dp(7))
+            setPadding(dp(10), dp(8), dp(10), dp(8))
             background = GradientDrawable().apply {
                 setColor(0xE618202A.toInt())
                 cornerRadius = dp(12).toFloat()
@@ -515,11 +485,9 @@ class OverlayService : Service(), OverlayDisplay {
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val movedX = event.rawX.toInt() - startX
-                    val movedY = event.rawY.toInt() - startY
-                    mp.x = initialX + movedX
-                    mp.y = initialY + movedY
-                    if (movedX != 0 || movedY != 0) wm.updateViewLayout(miniView, mp)
+                    mp.x = initialX + (event.rawX.toInt() - startX)
+                    mp.y = initialY + (event.rawY.toInt() - startY)
+                    wm.updateViewLayout(miniView, mp)
                     true
                 }
                 MotionEvent.ACTION_UP -> {
@@ -539,228 +507,34 @@ class OverlayService : Service(), OverlayDisplay {
         mini = miniView
         miniParams = mp
 
-        buildBoardWindow()
-        applyOpacity()
+        depthSpin?.onItemSelectedListener = spinnerListener { selfActions.onDepthSelect(it) }
+        timeSpin?.onItemSelectedListener = spinnerListener { selfActions.onTimeSelect(it) }
+        opacitySpin?.onItemSelectedListener = spinnerListener { selfActions.onOpacitySelect(it) }
+
+        refreshBookLine()
+        applyOpacity(0.85f)
     }
 
-    private fun buildBoardWindow() {
-        val density = resources.displayMetrics.density
-        val w = (100 * density).toInt()
-        val h = (w * 1.2f).toInt()
-        fun dp(value: Int) = (value * density).toInt()
-        val board = MiniBoardView(this)
-        boardView = board
-        val wrap = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.TRANSPARENT)
-        }
-        val card = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(3), dp(3), dp(3), dp(3))
-            background = GradientDrawable().apply {
-                setColor(0xE618202A.toInt())
-                cornerRadius = dp(8).toFloat()
-            }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT,
+    private fun spinner(labels: List<String>, selected: Int): Spinner =
+        Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@OverlayService,
+                android.R.layout.simple_spinner_dropdown_item,
+                labels,
             )
+            setSelection(selected.coerceIn(0, labels.lastIndex))
         }
-        card.addView(board, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        val grip = TextView(this).apply {
-            text = "↘"
-            textSize = 11f
-            setTextColor(0x80FFFFFF.toInt())
-            gravity = Gravity.END
-        }
-        card.addView(grip)
-        wrap.addView(card)
 
-        val bp = WindowManager.LayoutParams(
-            w,
-            h,
-            if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            else WindowManager.LayoutParams.TYPE_PHONE,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-            PixelFormat.TRANSLUCENT,
-        )
-        bp.gravity = Gravity.TOP or Gravity.END
-        bp.x = dp(8)
-        bp.y = dp(160)
-
-        board.setOnTouchListener { _, event ->
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    startX = event.rawX.toInt(); startY = event.rawY.toInt()
-                    initialX = bp.x; initialY = bp.y
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    bp.x = initialX - (event.rawX.toInt() - startX)
-                    bp.y = initialY + (event.rawY.toInt() - startY)
-                    wm.updateViewLayout(wrap, bp)
-                    true
-                }
-                else -> false
-            }
-        }
-        grip.setOnTouchListener { _, event ->
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    startX = event.rawX.toInt(); startY = event.rawY.toInt()
-                    initialWidth = bp.width
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val nw = (initialWidth - (event.rawX.toInt() - startX)).coerceIn(dp(60), dp(240))
-                    bp.width = nw
-                    bp.height = (nw * 1.2f).toInt()
-                    wm.updateViewLayout(wrap, bp)
-                    true
-                }
-                else -> false
-            }
-        }
-        boardRoot = wrap
-        boardParams = bp
-        boardVisible = false
+    private fun weighted(v: View, w: Float) = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, w).let {
+        v.layoutParams = it
+        v
     }
 
-    private fun toggleBoard() {
-        val wrap = boardRoot ?: return
-        val bp = boardParams ?: return
-        if (boardVisible) {
-            runCatching { wm.removeView(wrap) }
-            boardVisible = false
-            toast("迷你棋盘已隐藏")
-        } else {
-            runCatching { wm.addView(wrap, bp) }
-            boardVisible = true
-            toast("迷你棋盘已显示（拖↘缩放）")
-            refreshMiniBoard()
+    private fun spinnerListener(cb: (Int) -> Unit) = object : android.widget.AdapterView.OnItemSelectedListener {
+        override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+            cb(position)
         }
-    }
-
-    private fun overlayDialog(): AlertDialog.Builder {
-        val ctx = ContextThemeWrapper(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-        return AlertDialog.Builder(ctx)
-    }
-
-    private fun showBookDialog() {
-        BookManager.loadPrefs(applicationContext)
-        val localNames = BookManager.listLocal(this).map { it.name }
-        val items = mutableListOf("云库 chessdb（在线）")
-        items += localNames.map { name ->
-            if (BookManager.mode == 1 && BookManager.bookName == name) "★ $name（当前）" else name
-        }
-        items += "下载开局库…"
-        overlayDialog()
-            .setTitle("切换开局库 · " + BookManager.summary())
-            .setItems(items.toTypedArray()) { _, which ->
-                when {
-                    which == 0 -> {
-                        BookManager.useCloud(applicationContext)
-                        BookManager.clearHit()
-                        bookText?.text = "开局库：" + BookManager.summary()
-                        toast("已切换云库")
-                    }
-                    which <= localNames.size -> {
-                        val name = localNames[which - 1]
-                        val ok = BookManager.openLocal(applicationContext, name)
-                        BookManager.clearHit()
-                        bookText?.text = "开局库：" + BookManager.summary()
-                        toast(if (ok) "已切换到 $name" else "打开失败：$name")
-                    }
-                    else -> showDownloadDialog(bookOnly = true)
-                }
-            }
-            .setNegativeButton("关闭", null)
-            .show()
-    }
-
-    private fun showDownloadDialog(bookOnly: Boolean = false) {
-        Thread {
-            try {
-                val engines = if (bookOnly) emptyList() else ProCloud.fetchList("engine")
-                val books = ProCloud.fetchList("openBook")
-                mainHandler.post { pickAndDownload(engines, books, bookOnly) }
-            } catch (t: Throwable) {
-                mainHandler.post { toast("列表获取失败：${t.message}") }
-            }
-        }.start()
-    }
-
-    private fun pickAndDownload(
-        engines: List<CloudFileInfo>,
-        books: List<CloudFileInfo>,
-        bookOnly: Boolean,
-    ) {
-        val labels = mutableListOf<String>()
-        val targets = mutableListOf<Pair<String, CloudFileInfo>>()
-        if (!bookOnly) {
-            engines.forEach {
-                labels += "引擎 ${it.name} / ${it.fileName} (${it.size / 1024 / 1024}MB)"
-                targets += "engine" to it
-            }
-        }
-        books.forEach {
-            labels += "开局库 ${it.name} (${it.size / 1024}KB)"
-            targets += "book" to it
-        }
-        if (labels.isEmpty()) {
-            toast("无可下载项")
-            return
-        }
-        overlayDialog()
-            .setTitle("下载引擎 / 开局库")
-            .setItems(labels.toTypedArray()) { _, which ->
-                val (kind, info) = targets[which]
-                startDownload(kind, info)
-            }
-            .setNegativeButton("取消", null)
-            .show()
-    }
-
-    private fun startDownload(kind: String, info: CloudFileInfo) {
-        val dir = if (kind == "engine") File(filesDir, "engine") else BookManager.booksDir(this)
-        dir.mkdirs()
-        val dest = File(dir, info.fileName)
-        val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100 }
-        val pct = TextView(this).apply { text = "0%" }
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 24, 48, 8)
-            addView(TextView(this@OverlayService).apply { text = info.name })
-            addView(bar)
-            addView(pct)
-        }
-        val dlg = overlayDialog()
-            .setTitle("下载 ${info.fileName}")
-            .setView(box)
-            .setCancelable(false)
-            .setNegativeButton("取消", null)
-            .create()
-        dlg.show()
-        Thread {
-            val ok = ProCloud.download(info.url, dest) { p ->
-                mainHandler.post {
-                    bar.progress = p
-                    pct.text = "$p%"
-                }
-            }
-            mainHandler.post {
-                dlg.dismiss()
-                if (ok) {
-                    if (kind == "book") {
-                        BookManager.openLocal(applicationContext, dest.name)
-                        bookText?.text = "开局库：" + BookManager.summary()
-                    }
-                    toast("下载完成 ${dest.name}")
-                } else {
-                    toast("下载失败")
-                }
-            }
-        }.start()
+        override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
     }
 
     private fun moveHandler(event: MotionEvent, p: WindowManager.LayoutParams, panel: LinearLayout): Boolean {
@@ -794,8 +568,7 @@ class OverlayService : Service(), OverlayDisplay {
             }
             MotionEvent.ACTION_MOVE -> {
                 val width = initialWidth + (event.rawX.toInt() - startX)
-                val clampedWidth = width.coerceIn((maxWidth / 3).coerceAtLeast(200), maxWidth)
-                p.width = clampedWidth
+                p.width = width.coerceIn((maxWidth / 3).coerceAtLeast(200), maxWidth)
                 p.height = WindowManager.LayoutParams.WRAP_CONTENT
                 wm.updateViewLayout(panel, p)
                 return true
@@ -808,45 +581,6 @@ class OverlayService : Service(), OverlayDisplay {
         expanded = value
         root?.visibility = if (value) View.VISIBLE else View.GONE
         mini?.visibility = if (value) View.GONE else View.VISIBLE
-    }
-
-    private fun controlTile(label: String, initial: String, weight: Float, onDelta: (Int) -> Unit): LinearLayout {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, weight).apply {
-                marginEnd = dp3()
-            }
-            background = GradientDrawable().apply {
-                setColor(0x22FFFFFF.toInt())
-                cornerRadius = dp7().toFloat()
-            }
-        }
-        row.addView(TextView(this).apply {
-            text = label
-            textSize = 10.5f
-            setTextColor(0xB3FFFFFF.toInt())
-        })
-        val value = TextView(this).apply {
-            text = initial
-            textSize = 11.5f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginStart = dp2()
-                marginEnd = dp2()
-            }
-        }
-        row.addView(value)
-        when (label) {
-            "深" -> depthText = value
-            "时" -> timeText = value
-            "透明" -> opacityText = value
-        }
-        row.addView(miniButton("-") { onDelta(-1) })
-        row.addView(miniButton("+") { onDelta(1) })
-        return row
     }
 
     private fun actionButton(label: String): Button = Button(this).apply {
@@ -865,18 +599,16 @@ class OverlayService : Service(), OverlayDisplay {
 
     private fun miniButton(label: String, action: () -> Unit): Button = Button(this).apply {
         text = label
-        textSize = 9f
+        textSize = 11f
         isAllCaps = false
         includeFontPadding = false
         minHeight = 0
         minWidth = 0
-        setPadding(dp(5), 0, dp(5), 0)
+        setPadding(dp(8), 0, dp(8), 0)
         setTextColor(Color.WHITE)
         stateListAnimator = null
         background = roundBackground(0xFF334154.toInt(), dp7().toFloat())
-        layoutParams = LinearLayout.LayoutParams(dp(18), dp(18)).apply {
-            marginStart = dp(2)
-        }
+        layoutParams = LinearLayout.LayoutParams(dp(24), dp(22)).apply { marginStart = dp(3) }
         setOnClickListener { action() }
     }
 
@@ -891,8 +623,6 @@ class OverlayService : Service(), OverlayDisplay {
 
     private fun dp8(): Int = (8 * resources.displayMetrics.density).toInt()
     private fun dp7(): Int = (7 * resources.displayMetrics.density).toInt()
-    private fun dp3(): Int = (3 * resources.displayMetrics.density).toInt()
-    private fun dp2(): Int = (2 * resources.displayMetrics.density).toInt()
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private fun toast(message: String) {
@@ -903,11 +633,10 @@ class OverlayService : Service(), OverlayDisplay {
         statusText?.text = message
     }
 
-    private fun applyOpacity() {
-        root?.alpha = opacity
-        mini?.alpha = opacity
-        boardRoot?.alpha = opacity
-        opacityText?.text = (opacity * 100).toInt().toString() + "%"
+    private fun applyOpacity(a: Float) {
+        val alpha = a.coerceIn(0.35f, 1f)
+        root?.alpha = alpha
+        mini?.alpha = alpha
     }
 
     private fun setScoreBar(scoreCp: Int?) {
@@ -927,7 +656,6 @@ class OverlayService : Service(), OverlayDisplay {
     private fun refreshButtons() {
         val connected = LiveLinkService.isConnected
         val running = ConnectSession.isRunning
-        autoOn = ConnectSession.autoMoveOn
         linkButton?.apply {
             text = if (connected) "已连接" else "连线"
             background = roundBackground(
@@ -936,37 +664,40 @@ class OverlayService : Service(), OverlayDisplay {
             )
         }
         analyzeButton?.apply {
-            text = when {
-                running && autoOn -> "分析·自动"
-                running -> "分析·开"
-                autoOn -> "分析(自动)"
-                else -> "分析"
-            }
+            text = if (running) "分析·开" else "分析"
             background = roundBackground(
-                if (running) 0xFF1565C0.toInt()
-                else if (autoOn) 0xFF6A1B9A.toInt()
-                else 0xFF39465A.toInt(),
+                if (running) 0xFF1565C0.toInt() else 0xFF39465A.toInt(),
                 dp8().toFloat(),
             )
         }
         playButton?.apply {
-            val ok = ConnectSession.lastRecognizedOk
-            text = if (ok) "✓出子" else "出子"
+            text = if (ConnectSession.lastRecognizedOk) "✓出子" else "出子"
         }
+        limitHint?.text = if (running) {
+            "分析中：忽略深度/时间 · 点「出子」用当前结果"
+        } else {
+            "分析关 · 点「出子」用深度/时间算一着"
+        }
+        depthSpin?.alpha = if (running) 0.35f else 1f
+        timeSpin?.alpha = if (running) 0.35f else 1f
     }
 
-    private fun refreshMiniBoard() {
+    private fun refreshBookLine() {
+        val hit = BookManager.lastHit
         val board = ConnectSession.lastBoard
-        val result = ConnectSession.lastResult
-        val hints = if (result.fen == ConnectSession.lastFen && result.bestmove.isNotBlank()) {
-            ConnectSession.lastHintMoves
+        val name = BookManager.summary()
+        bookText?.text = if (hit != null && board != null && BookManager.enabled) {
+            "$name · ${hit.chinese(board)}"
         } else {
-            emptyList()
+            name + if (BookManager.enabled) "" else "（关）"
         }
-        boardView?.position = board
-        boardView?.multiHints = hints
-        boardView?.statusLine = if (hints.isEmpty()) ConnectSession.lastMessage
-        else buildProAnalysisLine(result, board)
+        bookToggle?.apply {
+            text = if (BookManager.enabled) "库·开" else "启用库"
+            background = roundBackground(
+                if (BookManager.enabled) 0xFF2E7D32.toInt() else 0xFF334154.toInt(),
+                dp7().toFloat(),
+            )
+        }
     }
 
     private fun buildProAnalysisLine(result: EngineResult, board: Position?): String {
@@ -989,23 +720,15 @@ class OverlayService : Service(), OverlayDisplay {
         return "$score (${result.depth}) $npsK $pvText".trim()
     }
 
-    private fun refreshBookLine() {
-        val hit = BookManager.lastHit
-        val board = ConnectSession.lastBoard
-        bookText?.text = if (hit != null && board != null) {
-            "开局库：${hit.chinese(board)}  ${hit.score}分  胜${"%.0f".format(hit.winRate)}%  [${hit.source}]"
-        } else {
-            "开局库：" + BookManager.summary()
-        }
-    }
-
     override fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean) {
         refreshButtons()
     }
 
     override fun updateControls(depth: Int, seconds: Int) {
-        depthText?.text = if (depth <= 0) "不限" else depth.toString() + "层"
-        timeText?.text = seconds.toString() + "秒"
+        val di = depthValues.indexOf(depth).takeIf { it >= 0 } ?: 0
+        val ti = timeValues.indexOf(seconds).takeIf { it >= 0 } ?: 1
+        depthSpin?.setSelection(di)
+        timeSpin?.setSelection(ti)
     }
 
     override fun updateInfo(cloud: String, engineSummary: String, engineDetail: String) {
@@ -1014,8 +737,9 @@ class OverlayService : Service(), OverlayDisplay {
     }
 
     override fun updateOpacity(alpha: Float) {
-        opacity = alpha.coerceIn(0.35f, 1f)
-        applyOpacity()
+        applyOpacity(alpha)
+        val oi = opacityValues.indexOfFirst { kotlin.math.abs(it - alpha) < 0.02f }
+        if (oi >= 0) opacitySpin?.setSelection(oi)
     }
 
     override fun updateConnect(
@@ -1026,35 +750,25 @@ class OverlayService : Service(), OverlayDisplay {
         message: String,
     ) {
         mainHandler.post {
-            autoOn = autoOnValue
             setStatus(message.ifBlank { sideLabel })
             val engReady = engine?.isReady == true
             val result = ConnectSession.lastResult
             val board = ConnectSession.lastBoard
             val bookHit = BookManager.lastHit
-            // 只显示与当前局面匹配的结果，避免旧着法串台
-            val resultFresh = result.bestmove.isNotBlank() && result.fen.isNotBlank() && result.fen == ConnectSession.lastFen
+            val resultFresh = result.bestmove.isNotBlank() &&
+                result.fen.isNotBlank() &&
+                result.fen == ConnectSession.lastFen
             analysisText?.text = when {
-                bookHit != null && board != null && resultFresh && result.bestmove == bookHit.move ->
-                    "开局库 ${bookHit.chinese(board)}  ${bookHit.score}分  胜${"%.0f".format(bookHit.winRate)}%  [${bookHit.source}]"
+                BookManager.enabled && bookHit != null && board != null && resultFresh &&
+                    result.bestmove == bookHit.move ->
+                    "开局库 ${bookHit.chinese(board)}  ${bookHit.score}分  [${bookHit.source}]"
                 !engReady -> "皮卡鱼启动中…"
-                !resultFresh -> {
-                    if (message.contains("分析中")) "皮卡鱼思考中…" else "皮卡鱼 —"
-                }
+                !resultFresh -> if (message.contains("分析中")) "皮卡鱼思考中…" else "皮卡鱼 —"
                 else -> buildProAnalysisLine(result, board)
             }
             setScoreBar(if (resultFresh) result.scoreCp else null)
             refreshBookLine()
-            refreshMiniBoard()
             refreshButtons()
-        }
-    }
-
-    override fun updateMiniBoard(position: Position?, hint: Quad?, status: String) {
-        mainHandler.post {
-            boardView?.position = position
-            if (hint != null) boardView?.multiHints = listOf(hint)
-            boardView?.statusLine = status
         }
     }
 
@@ -1064,23 +778,21 @@ class OverlayService : Service(), OverlayDisplay {
         overlayDisplay = null
         root?.let { runCatching { wm.removeView(it) } }
         mini?.let { runCatching { wm.removeView(it) } }
-        boardRoot?.let { runCatching { wm.removeView(it) } }
         root = null
         mini = null
-        boardRoot = null
         params = null
         miniParams = null
-        boardParams = null
         analysisText = null
         bookText = null
         statusText = null
-        depthText = null
-        timeText = null
-        opacityText = null
         linkButton = null
         analyzeButton = null
         playButton = null
-        boardView = null
+        bookToggle = null
+        depthSpin = null
+        timeSpin = null
+        opacitySpin = null
+        limitHint = null
         scoreBarFill = null
         super.onDestroy()
     }
