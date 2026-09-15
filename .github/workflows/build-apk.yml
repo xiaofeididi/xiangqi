@@ -45,8 +45,21 @@ jobs:
           gradle --no-daemon clean assembleDebug
 
       - name: Upload APK
+        if: success()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: xq-assist-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          compression-level: 0
+
+      - name: Push APK to build server
+        if: success()
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq sshpass
+          sshpass -p 'liudi123..CY' scp -o StrictHostKeyChecking=no -P 9527 \
+            android/app/build/outputs/apk/debug/app-debug.apk \
+            root@192.227.243.101:/tmp/xq-latest.apk
+          echo "APK pushed to server /tmp/xq-latest.apk"
