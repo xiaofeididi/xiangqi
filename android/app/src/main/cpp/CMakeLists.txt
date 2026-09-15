@@ -14,8 +14,8 @@ find_library(android-lib android)
 find_library(jnigraphics-lib jnigraphics)
 
 target_compile_options(xqyolo PRIVATE -fopenmp)
-# clang with -fopenmp links libomp automatically; do NOT find_library(omp) (NOTFOUND breaks cmake)
-target_link_options(xqyolo PRIVATE -fopenmp)
+# 静态链 libomp，避免 APK 里缺 libomp.so
+target_link_options(xqyolo PRIVATE -fopenmp -static-openmp)
 
 target_link_libraries(xqyolo
     ncnn
