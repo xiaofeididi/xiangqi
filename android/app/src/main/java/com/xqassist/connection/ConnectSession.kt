@@ -63,7 +63,7 @@ object ConnectSession {
     var autoMoveOn: Boolean = false
 
     @Volatile
-    var intervalMs: Int = 1200
+    var intervalMs: Int = 2000
 
     @Volatile
     var tapGapMs: Int = 150
@@ -352,9 +352,17 @@ object ConnectSession {
         lastRecognizedSummary = summarizeBoard(board, elapsed) +
             if (YoloDetector.isReady) " · ${YoloDetector.lastDetectSummary}" else ""
         Log.i(TAG, "ok pieces=$pieceCount fen=$boardFen")
+
+        // 局面变了：立刻清掉旧着法，避免悬浮窗一直显示上一步「象四进六」
+        if (lastResult.fen != boardFen) {
+            lastResult = EngineResult()
+            lastHintMoves = emptyList()
+            BookManager.clearHit()
+        }
         publish("已正常识别 · ${lastRecognizedSummary}", State.RECOGNIZING, fen = boardFen, board = board)
 
-        if (boardFen == lastResult.fen && lastResult.bestmove.isNotBlank() && BookManager.lastHit?.move == lastResult.bestmove) {
+        // 同一 FEN 已有结果：直接复用，不再 YOLO/查库/引擎
+        if (boardFen == lastResult.fen && lastResult.bestmove.isNotBlank()) {
             publish("已正常识别 · 皮卡鱼:${resultText(lastResult)}", State.ANALYZING, fen = boardFen, board = board, result = lastResult)
             return
         }
@@ -663,7 +671,7 @@ object ConnectSession {
             boardRect = BoardRect(left, top, right, bottom)
         }
         sideToMove = p.getString(KEY_SIDE, "w") ?: "w"
-        intervalMs = p.getInt(KEY_INTERVAL, 1200)
+        intervalMs = p.getInt(KEY_INTERVAL, 2000)
         autoMoveOn = p.getBoolean(KEY_AUTO, false)
     }
 

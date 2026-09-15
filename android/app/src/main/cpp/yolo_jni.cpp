@@ -39,7 +39,8 @@ Java_com_xqassist_vision_YoloNcnn_nativeInit(JNIEnv* env, jobject, jstring jpara
     }
     g_net = new ncnn::Net();
     g_net->opt.use_vulkan_compute = false;
-    g_net->opt.num_threads = 2;
+    g_net->opt.num_threads = 1; // 降压，避免挤死天天象棋 webview
+    g_net->opt.lightmode = true;
     int r1 = g_net->load_param(param);
     int r2 = g_net->load_model(bin);
     env->ReleaseStringUTFChars(jparam, param);
@@ -69,33 +70,37 @@ Java_com_xqassist_vision_YoloNcnn_nativeDetect(JNIEnv* env, jobject, jobject bit
 
     const int W = info.width;
     const int H = info.height;
-    // letterbox to 640x640
     const int S = 640;
     float sc = (float)S / (W > H ? W : H);
     int nw = (int)(W * sc);
     int nh = (int)(H * sc);
+    if (nw < 1) nw = 1;
+    if (nh < 1) nh = 1;
     int ox = (S - nw) / 2;
     int oy = (S - nh) / 2;
 
+    // 用 ncnn 内置缩放，避免 1080×2400 逐像素循环拖死手机
+    ncnn::Mat resized = ncnn::Mat::from_pixels_resize(
+        (const unsigned char*)pixels,
+        ncnn::Mat::PIXEL_RGBA2RGB,
+        W, H, info.stride,
+        nw, nh);
+    AndroidBitmap_unlockPixels(env, bitmap);
+    if (resized.empty()) return nullptr;
+
     ncnn::Mat in(S, S, 3);
     in.fill(114);
-    const uint8_t* src = (const uint8_t*)pixels;
     for (int y = 0; y < nh; y++) {
-        int sy = (int)(y / sc);
-        if (sy >= H) sy = H - 1;
+        const unsigned char* src = resized.row(y);
+        float* r = (float*)in.channel(0);
+        float* g = (float*)in.channel(1);
+        float* b = (float*)in.channel(2);
         for (int x = 0; x < nw; x++) {
-            int sx = (int)(x / sc);
-            if (sx >= W) sx = W - 1;
-            const uint8_t* p = src + sy * info.stride + sx * 4;
-            float* r = (float*)in.channel(0);
-            float* g = (float*)in.channel(1);
-            float* b = (float*)in.channel(2);
-            r[(y + oy) * S + (x + ox)] = p[0] / 255.f;
-            g[(y + oy) * S + (x + ox)] = p[1] / 255.f;
-            b[(y + oy) * S + (x + ox)] = p[2] / 255.f;
+            r[(y + oy) * S + (x + ox)] = src[x * 3 + 0] / 255.f;
+            g[(y + oy) * S + (x + ox)] = src[x * 3 + 1] / 255.f;
+            b[(y + oy) * S + (x + ox)] = src[x * 3 + 2] / 255.f;
         }
     }
-    AndroidBitmap_unlockPixels(env, bitmap);
 
     ncnn::Extractor ex = g_net->create_extractor();
     ex.input("in0", in);

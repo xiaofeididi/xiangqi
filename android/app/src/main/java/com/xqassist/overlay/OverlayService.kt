@@ -365,14 +365,15 @@ class OverlayService : Service(), OverlayDisplay {
         panel.addView(card)
 
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        header.addView(TextView(this).apply {
+        val title = TextView(this).apply {
             text = "≡ 象棋助手"
             textSize = 12f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
-        })
+        }
+        header.addView(title)
         header.addView(miniButton("棋") { toggleBoard() })
         header.addView(miniButton("库") { showBookDialog() })
         header.addView(miniButton("下") { showDownloadDialog() })
@@ -473,7 +474,7 @@ class OverlayService : Service(), OverlayDisplay {
         p.x = dp(4)
         p.y = dp(72)
 
-        header.setOnTouchListener { _, event -> moveHandler(event, p, panel) }
+        title.setOnTouchListener { _, event -> moveHandler(event, p, panel) }
         resize.setOnTouchListener { _, event -> resizeHandler(event, p, panel, metrics.widthPixels - dp(8)) }
 
         linkButton?.setOnClickListener { selfActions.onLink() }
@@ -957,10 +958,14 @@ class OverlayService : Service(), OverlayDisplay {
     private fun refreshMiniBoard() {
         val board = ConnectSession.lastBoard
         val result = ConnectSession.lastResult
-        val hints = ConnectSession.lastHintMoves
+        val hints = if (result.fen == ConnectSession.lastFen && result.bestmove.isNotBlank()) {
+            ConnectSession.lastHintMoves
+        } else {
+            emptyList()
+        }
         boardView?.position = board
         boardView?.multiHints = hints
-        boardView?.statusLine = if (result.bestmove.isBlank()) ConnectSession.lastMessage
+        boardView?.statusLine = if (hints.isEmpty()) ConnectSession.lastMessage
         else buildProAnalysisLine(result, board)
     }
 
@@ -1027,16 +1032,18 @@ class OverlayService : Service(), OverlayDisplay {
             val result = ConnectSession.lastResult
             val board = ConnectSession.lastBoard
             val bookHit = BookManager.lastHit
+            // 只显示与当前局面匹配的结果，避免旧着法串台
+            val resultFresh = result.bestmove.isNotBlank() && result.fen.isNotBlank() && result.fen == ConnectSession.lastFen
             analysisText?.text = when {
-                bookHit != null && board != null && result.bestmove == bookHit.move ->
+                bookHit != null && board != null && resultFresh && result.bestmove == bookHit.move ->
                     "开局库 ${bookHit.chinese(board)}  ${bookHit.score}分  胜${"%.0f".format(bookHit.winRate)}%  [${bookHit.source}]"
                 !engReady -> "皮卡鱼启动中…"
-                result.bestmove.isBlank() -> {
+                !resultFresh -> {
                     if (message.contains("分析中")) "皮卡鱼思考中…" else "皮卡鱼 —"
                 }
                 else -> buildProAnalysisLine(result, board)
             }
-            setScoreBar(result.scoreCp)
+            setScoreBar(if (resultFresh) result.scoreCp else null)
             refreshBookLine()
             refreshMiniBoard()
             refreshButtons()
