@@ -80,25 +80,32 @@ Java_com_xqassist_vision_YoloNcnn_nativeDetect(JNIEnv* env, jobject, jobject bit
     int oy = (S - nh) / 2;
 
     // 用 ncnn 内置缩放，避免 1080×2400 逐像素循环拖死手机
+    // from_pixels_resize 返回 float planar Mat（0–255）
     ncnn::Mat resized = ncnn::Mat::from_pixels_resize(
         (const unsigned char*)pixels,
         ncnn::Mat::PIXEL_RGBA2RGB,
         W, H, info.stride,
         nw, nh);
     AndroidBitmap_unlockPixels(env, bitmap);
-    if (resized.empty()) return nullptr;
+    if (resized.empty() || resized.c != 3) return nullptr;
 
     ncnn::Mat in(S, S, 3);
-    in.fill(114);
-    for (int y = 0; y < nh; y++) {
-        const unsigned char* src = resized.row(y);
-        float* r = (float*)in.channel(0);
-        float* g = (float*)in.channel(1);
-        float* b = (float*)in.channel(2);
-        for (int x = 0; x < nw; x++) {
-            r[(y + oy) * S + (x + ox)] = src[x * 3 + 0] / 255.f;
-            g[(y + oy) * S + (x + ox)] = src[x * 3 + 1] / 255.f;
-            b[(y + oy) * S + (x + ox)] = src[x * 3 + 2] / 255.f;
+    in.fill(114.f / 255.f);
+    {
+        const float* sr = resized.channel(0);
+        const float* sg = resized.channel(1);
+        const float* sb = resized.channel(2);
+        float* dr = in.channel(0);
+        float* dg = in.channel(1);
+        float* db = in.channel(2);
+        for (int y = 0; y < nh; y++) {
+            for (int x = 0; x < nw; x++) {
+                const int si = y * nw + x;
+                const int di = (y + oy) * S + (x + ox);
+                dr[di] = sr[si] / 255.f;
+                dg[di] = sg[si] / 255.f;
+                db[di] = sb[si] / 255.f;
+            }
         }
     }
 
