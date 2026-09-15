@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
+    <!-- Pro 列表/直链 + chessdb 均为明文 HTTP -->
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">chessdb.cn</domain>
+        <domain includeSubdomains="true">wqby.vip</domain>
+        <domain includeSubdomains="true">pro.wqby.vip</domain>
     </domain-config>
 </network-security-config>
