@@ -27,6 +27,13 @@ class MiniBoardView @JvmOverloads constructor(
     var hintMove: Quad? = null
         set(value) {
             field = value
+            multiHints = if (value != null) listOf(value) else emptyList()
+            invalidate()
+        }
+    /** Pro 风格：最多 2 步箭头，第 1 红 #A60A1E，第 2 深灰 #2C3742 */
+    var multiHints: List<Quad> = emptyList()
+        set(value) {
+            field = value.take(2)
             invalidate()
         }
     var statusLine: String = ""
@@ -113,12 +120,14 @@ class MiniBoardView @JvmOverloads constructor(
             }
         }
 
-        hintMove?.let { m ->
+        val hints = if (multiHints.isNotEmpty()) multiHints else listOfNotNull(hintMove)
+        hints.forEachIndexed { idx, m ->
             val x0 = left + m.fromFile * cell
             val y0 = top + m.fromRank * cell
             val x1 = left + m.toFile * cell
             val y1 = top + m.toRank * cell
-            drawArrow(canvas, x0, y0, x1, y1)
+            val color = if (idx == 0) Color.argb(255, 166, 10, 30) else Color.argb(255, 44, 55, 66)
+            drawArrow(canvas, x0, y0, x1, y1, color, idx + 1)
         }
 
         if (statusH > 0f) {
@@ -129,7 +138,8 @@ class MiniBoardView @JvmOverloads constructor(
         }
     }
 
-    private fun drawArrow(canvas: Canvas, x0: Float, y0: Float, x1: Float, y1: Float) {
+    private fun drawArrow(canvas: Canvas, x0: Float, y0: Float, x1: Float, y1: Float, color: Int, label: Int) {
+        val paint = Paint(hintPaint).apply { this.color = color }
         val dx = x1 - x0
         val dy = y1 - y0
         val len = kotlin.math.sqrt(dx * dx + dy * dy)
@@ -141,7 +151,7 @@ class MiniBoardView @JvmOverloads constructor(
         val sy = y0 + uy * shrink
         val ex = x1 - ux * shrink
         val ey = y1 - uy * shrink
-        canvas.drawLine(sx, sy, ex, ey, hintPaint)
+        canvas.drawLine(sx, sy, ex, ey, paint)
         val head = 8f * density
         val path = Path().apply {
             moveTo(ex, ey)
@@ -149,6 +159,18 @@ class MiniBoardView @JvmOverloads constructor(
             lineTo(ex - ux * head + uy * head * 0.55f, ey - uy * head - ux * head * 0.55f)
             close()
         }
-        canvas.drawPath(path, Paint(hintPaint).apply { style = Paint.Style.FILL })
+        canvas.drawPath(path, Paint(paint).apply { style = Paint.Style.FILL })
+        // Pro 在箭头中点标序号
+        val midX = (sx + ex) / 2f
+        val midY = (sy + ey) / 2f
+        canvas.drawCircle(midX, midY, 7f * density, Paint(paint).apply {
+            style = Paint.Style.FILL
+            color = Color.argb(160, 255, 255, 255)
+        })
+        canvas.drawText(label.toString(), midX - 3f * density, midY + 3.5f * density, Paint(textPaint).apply {
+            color = Color.rgb(20, 20, 20)
+            textSize = 9f * density
+            textAlign = Paint.Align.CENTER
+        })
     }
 }

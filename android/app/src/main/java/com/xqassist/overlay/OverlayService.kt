@@ -1,5 +1,6 @@
 package com.xqassist.overlay
 
+import android.app.AlertDialog
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -15,6 +16,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -22,17 +24,24 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
+import com.xqassist.book.BookManager
+import com.xqassist.book.ProCloud
 import com.xqassist.capture.CaptureService
 import com.xqassist.connection.ConnectSession
 import com.xqassist.connection.LiveLinkService
 import com.xqassist.core.Notation
+import com.xqassist.core.Position
 import com.xqassist.core.Quad
 import com.xqassist.engine.EngineHolder
+import com.xqassist.engine.EngineResult
 import com.xqassist.engine.UcciEngine
+import com.xqassist.ui.MiniBoardView
 import com.xqassist.vision.TemplatePieceReader
 import com.xqassist.vision.YoloDetector
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 interface OverlayDisplay {
@@ -41,12 +50,13 @@ interface OverlayDisplay {
     fun updateInfo(cloud: String, engineSummary: String, engineDetail: String)
     fun updateOpacity(alpha: Float)
     fun updateConnect(autoOn: Boolean, delayMs: Int, sideLabel: String, running: Boolean, message: String)
-    fun updateMiniBoard(position: com.xqassist.core.Position?, hint: Quad?, status: String)
+    fun updateMiniBoard(position: Position?, hint: Quad?, status: String)
 }
 
 /**
- * 悬浮窗 Service：对齐 Pro FloatingWindowService。
- * 自持识别引擎、按钮回调与状态刷新；Activity 被杀后连线分析仍可继续。
+ * 悬浮窗：对齐 Pro 双窗口
+ * 1) 控制条 MATCH_PARENT×WRAP：分析行（完整 PV 中文）+ 开局库行 + 分数条
+ * 2) 迷你棋盘独立窗：默认 100dp×1.2，前 2 步箭头
  */
 class OverlayService : Service(), OverlayDisplay {
 
@@ -69,7 +79,6 @@ class OverlayService : Service(), OverlayDisplay {
         var overlayDisplay: OverlayDisplay? = null
 
         fun start(context: Context) {
-            // 不用 startForegroundService：避免 startForeground 失败/超时导致打开即杀
             context.startService(Intent(context, OverlayService::class.java))
         }
 
@@ -89,15 +98,23 @@ class OverlayService : Service(), OverlayDisplay {
     private var mini: TextView? = null
     private var params: WindowManager.LayoutParams? = null
     private var miniParams: WindowManager.LayoutParams? = null
-    private var infoText: TextView? = null
+
+    private var analysisText: TextView? = null
+    private var bookText: TextView? = null
     private var statusText: TextView? = null
+    private var scoreBarFill: View? = null
     private var depthText: TextView? = null
     private var timeText: TextView? = null
     private var opacityText: TextView? = null
     private var linkButton: Button? = null
     private var analyzeButton: Button? = null
     private var playButton: Button? = null
-    private var cloudText: TextView? = null
+
+    private var boardView: MiniBoardView? = null
+    private var boardRoot: LinearLayout? = null
+    private var boardParams: WindowManager.LayoutParams? = null
+    private var boardVisible = false
+
     private var expanded = true
     private var opacity = 1f
     private var startX = 0
@@ -105,13 +122,10 @@ class OverlayService : Service(), OverlayDisplay {
     private var initialX = 0
     private var initialY = 0
     private var initialWidth = 0
-    private var initialHeight = 0
     private var autoOn = false
-    private var delayMs = 150
     private var searchDepth = 0
     private var thinkSec = 3
 
-    /** Service 自持按钮回调，不经过 Activity */
     private val selfActions = object : Actions {
         override fun onLink() {
             if (LiveLinkService.isConnected) {
@@ -120,7 +134,7 @@ class OverlayService : Service(), OverlayDisplay {
                 toast("请在系统设置开启无障碍「象棋助手」")
                 try {
                     startActivity(
-                        android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                        Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                     )
                 } catch (t: Throwable) {
@@ -144,6 +158,7 @@ class OverlayService : Service(), OverlayDisplay {
             ConnectSession.attach(applicationContext)
             ConnectSession.provideEngine(engine)
             ConnectSession.provideReader(reader)
+            BookManager.loadPrefs(applicationContext)
             if (!YoloDetector.isReady) {
                 ensureYolo()
             }
@@ -157,7 +172,6 @@ class OverlayService : Service(), OverlayDisplay {
                 toast("屏幕识别未开，请回助手重新授权")
                 return
             }
-            // 无校准时 BoardAutoDetector 会自动找盘；失败原因会显示在悬浮窗
             ConnectSession.useEngineLimits = false
             if (engine?.isReady != true) {
                 setStatus("引擎启动中…")
@@ -251,8 +265,8 @@ class OverlayService : Service(), OverlayDisplay {
         overlayDisplay = this
         actions = selfActions
         ConnectSession.attach(applicationContext)
+        BookManager.loadPrefs(applicationContext)
         autoOn = ConnectSession.autoMoveOn
-        delayMs = ConnectSession.tapGapMs
         searchDepth = ConnectSession.searchDepth
         thinkSec = (ConnectSession.thinkMs / 1000).coerceAtLeast(1)
 
@@ -262,11 +276,10 @@ class OverlayService : Service(), OverlayDisplay {
 
         buildUi()
         ensureEngine()
-        // YOLO 仅在点分析时再 init，降低内存、减少对天天象棋的挤压
         refreshButtons()
         updateControls(searchDepth, thinkSec)
-        updateInfo("", "引擎启动中", ConnectSession.lastMessage.ifBlank { "待命" })
-        updateOpacity(1f)
+        analysisText?.text = "引擎启动中…"
+        bookText?.text = "开局库：" + BookManager.summary()
         setStatus(if (ConnectSession.boardRect == null) "未校准，分析时自动找盘" else "棋盘范围已就绪")
     }
 
@@ -282,7 +295,6 @@ class OverlayService : Service(), OverlayDisplay {
         }.start()
     }
 
-    /** 前台通知：Activity 被杀后 Service 与连线分析仍存活 */
     private fun startAsForeground() {
         try {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -332,8 +344,6 @@ class OverlayService : Service(), OverlayDisplay {
     private fun buildUi() {
         val metrics = resources.displayMetrics
         fun dp(value: Int) = (value * metrics.density).toInt()
-        val baseWidth = (metrics.widthPixels * 0.72f).toInt().coerceIn(dp(240), dp(430))
-        val baseHeight = baseWidth * 9 / 16 + dp(8)
 
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -344,9 +354,12 @@ class OverlayService : Service(), OverlayDisplay {
             setPadding(dp(10), dp(6), dp(10), dp(8))
             background = GradientDrawable().apply {
                 setColor(0xF218202A.toInt())
-                cornerRadius = dp(14).toFloat()
+                cornerRadius = dp(12).toFloat()
             }
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
         }
         panel.addView(card)
 
@@ -359,10 +372,13 @@ class OverlayService : Service(), OverlayDisplay {
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
         })
+        header.addView(miniButton("棋") { toggleBoard() })
+        header.addView(miniButton("库") { showBookDialog() })
+        header.addView(miniButton("下") { showDownloadDialog() })
         header.addView(miniButton("—") { setExpanded(false) })
         header.addView(miniButton("×") { selfActions.onCloseOverlay() })
         card.addView(header)
-        card.addView(spacer(dp(5)))
+        card.addView(spacer(dp(4)))
 
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         linkButton = actionButton("连线")
@@ -372,83 +388,99 @@ class OverlayService : Service(), OverlayDisplay {
         buttons.addView(analyzeButton)
         buttons.addView(playButton)
         card.addView(buttons)
-        card.addView(spacer(dp(5)))
+        card.addView(spacer(dp(4)))
 
         val controls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         controls.addView(controlTile("深", "不限", 1.0f) { delta -> selfActions.onDepthChange(delta) })
         controls.addView(controlTile("时", "3秒", 1.0f) { delta -> selfActions.onTimeChange(delta) })
         controls.addView(controlTile("透明", "100%", 1.2f) { delta -> selfActions.onOpacityChange(delta) })
         card.addView(controls)
-        card.addView(spacer(dp(5)))
+        card.addView(spacer(dp(4)))
 
-        val infoRow = LinearLayout(this).apply {
+        analysisText = TextView(this).apply {
+            text = "皮卡鱼 —"
+            textSize = 12.5f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            setLineSpacing(dp(2).toFloat(), 1.05f)
+            maxLines = 4
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+        card.addView(analysisText!!)
+
+        val barWrap = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(6)).apply {
+                topMargin = dp(4)
+            }
+            background = GradientDrawable().apply {
+                setColor(0xFF3B3A3C.toInt())
+                cornerRadius = dp(3).toFloat()
+            }
         }
-        infoText = TextView(this).apply {
-            text = "引擎\n-"
+        scoreBarFill = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.5f)
+            background = GradientDrawable().apply {
+                setColor(0xFFE752C8.toInt())
+                cornerRadius = dp(3).toFloat()
+            }
+        }
+        barWrap.addView(scoreBarFill!!)
+        card.addView(barWrap)
+        card.addView(spacer(dp(4)))
+
+        bookText = TextView(this).apply {
+            text = "开局库：" + BookManager.summary()
+            textSize = 11.5f
+            setTextColor(0xFF6AFFCD.toInt())
+            maxLines = 2
+        }
+        card.addView(bookText!!)
+
+        statusText = TextView(this).apply {
+            text = "待命"
             textSize = 11f
-            setTextColor(Color.WHITE)
-            setLineSpacing(dp(1).toFloat(), 1f)
-            setPadding(0, 0, dp(4), 0)
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            setTextColor(0xB3FFFFFF.toInt())
+            maxLines = 2
         }
-        cloudText = TextView(this).apply {
-            text = "状态\n-"
-            textSize = 11f
-            setTextColor(Color.WHITE)
-            setLineSpacing(dp(1).toFloat(), 1f)
-            setPadding(dp(4), 0, 0, 0)
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
-        }
-        infoRow.addView(infoText)
-        infoRow.addView(cloudText)
-        card.addView(infoRow)
-        statusText = cloudText
+        card.addView(statusText!!)
 
         val resize = TextView(this).apply {
             text = "↘"
             textSize = 14f
             setTextColor(0xB3FFFFFF.toInt())
             gravity = Gravity.END or Gravity.CENTER_VERTICAL
-            setPadding(0, dp(3), 0, 0)
+            setPadding(0, dp(2), 0, 0)
         }
-        card.addView(resize, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        card.addView(resize)
 
         val p = WindowManager.LayoutParams(
-            baseWidth,
-            baseHeight,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
             if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT,
         )
         p.gravity = Gravity.TOP or Gravity.START
-        p.x = dp(14)
-        p.y = dp(88)
+        p.x = dp(4)
+        p.y = dp(72)
 
         header.setOnTouchListener { _, event -> moveHandler(event, p, panel) }
-        resize.setOnTouchListener { _, event -> resizeHandler(event, p, panel, metrics.widthPixels - dp(16)) }
+        resize.setOnTouchListener { _, event -> resizeHandler(event, p, panel, metrics.widthPixels - dp(8)) }
 
         linkButton?.setOnClickListener { selfActions.onLink() }
-        linkButton?.setOnLongClickListener {
-            selfActions.onLinkLongPress()
-            true
-        }
+        linkButton?.setOnLongClickListener { selfActions.onLinkLongPress(); true }
         analyzeButton?.setOnClickListener { selfActions.onAnalyze() }
-        analyzeButton?.setOnLongClickListener {
-            selfActions.onSideToggle()
-            true
-        }
+        analyzeButton?.setOnLongClickListener { selfActions.onSideToggle(); true }
         playButton?.setOnClickListener { selfActions.onPlayMove() }
-        playButton?.setOnLongClickListener {
-            selfActions.onAutoMoveToggle()
-            true
-        }
+        playButton?.setOnLongClickListener { selfActions.onAutoMoveToggle(); true }
 
         val miniView = TextView(this).apply {
             text = "≡ 象棋"
@@ -504,6 +536,227 @@ class OverlayService : Service(), OverlayDisplay {
         params = p
         mini = miniView
         miniParams = mp
+
+        buildBoardWindow(dp)
+        applyOpacity()
+    }
+
+    private fun buildBoardWindow(dp: (Int) -> Int) {
+        val w = dp(100)
+        val h = (w * 1.2f).toInt()
+        val board = MiniBoardView(this)
+        boardView = board
+        val wrap = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.TRANSPARENT)
+        }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(3), dp(3), dp(3), dp(3))
+            background = GradientDrawable().apply {
+                setColor(0xE618202A.toInt())
+                cornerRadius = dp(8).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+        }
+        card.addView(board, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        val grip = TextView(this).apply {
+            text = "↘"
+            textSize = 11f
+            setTextColor(0x80FFFFFF.toInt())
+            gravity = Gravity.END
+        }
+        card.addView(grip)
+        wrap.addView(card)
+
+        val bp = WindowManager.LayoutParams(
+            w,
+            h,
+            if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else WindowManager.LayoutParams.TYPE_PHONE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT,
+        )
+        bp.gravity = Gravity.TOP or Gravity.END
+        bp.x = dp(8)
+        bp.y = dp(160)
+
+        board.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startX = event.rawX.toInt(); startY = event.rawY.toInt()
+                    initialX = bp.x; initialY = bp.y
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    bp.x = initialX - (event.rawX.toInt() - startX)
+                    bp.y = initialY + (event.rawY.toInt() - startY)
+                    wm.updateViewLayout(wrap, bp)
+                    true
+                }
+                else -> false
+            }
+        }
+        grip.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startX = event.rawX.toInt(); startY = event.rawY.toInt()
+                    initialWidth = bp.width
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val nw = (initialWidth - (event.rawX.toInt() - startX)).coerceIn(dp(60), dp(240))
+                    bp.width = nw
+                    bp.height = (nw * 1.2f).toInt()
+                    wm.updateViewLayout(wrap, bp)
+                    true
+                }
+                else -> false
+            }
+        }
+        boardRoot = wrap
+        boardParams = bp
+        boardVisible = false
+    }
+
+    private fun toggleBoard() {
+        val wrap = boardRoot ?: return
+        val bp = boardParams ?: return
+        if (boardVisible) {
+            runCatching { wm.removeView(wrap) }
+            boardVisible = false
+            toast("迷你棋盘已隐藏")
+        } else {
+            runCatching { wm.addView(wrap, bp) }
+            boardVisible = true
+            toast("迷你棋盘已显示（拖↘缩放）")
+            refreshMiniBoard()
+        }
+    }
+
+    private fun overlayDialog(): AlertDialog.Builder {
+        val ctx = ContextThemeWrapper(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        return AlertDialog.Builder(ctx)
+    }
+
+    private fun showBookDialog() {
+        BookManager.loadPrefs(applicationContext)
+        val localNames = BookManager.listLocal(this).map { it.name }
+        val items = mutableListOf("云库 chessdb（在线）")
+        items += localNames.map { name ->
+            if (BookManager.mode == 1 && BookManager.bookName == name) "★ $name（当前）" else name
+        }
+        items += "下载开局库…"
+        overlayDialog()
+            .setTitle("切换开局库 · " + BookManager.summary())
+            .setItems(items.toTypedArray()) { _, which ->
+                when {
+                    which == 0 -> {
+                        BookManager.useCloud(applicationContext)
+                        BookManager.clearHit()
+                        bookText?.text = "开局库：" + BookManager.summary()
+                        toast("已切换云库")
+                    }
+                    which <= localNames.size -> {
+                        val name = localNames[which - 1]
+                        val ok = BookManager.openLocal(applicationContext, name)
+                        BookManager.clearHit()
+                        bookText?.text = "开局库：" + BookManager.summary()
+                        toast(if (ok) "已切换到 $name" else "打开失败：$name")
+                    }
+                    else -> showDownloadDialog(bookOnly = true)
+                }
+            }
+            .setNegativeButton("关闭", null)
+            .show()
+    }
+
+    private fun showDownloadDialog(bookOnly: Boolean = false) {
+        Thread {
+            try {
+                val engines = if (bookOnly) emptyList() else ProCloud.fetchList("engine")
+                val books = ProCloud.fetchList("openBook")
+                mainHandler.post { pickAndDownload(engines, books, bookOnly) }
+            } catch (t: Throwable) {
+                mainHandler.post { toast("列表获取失败：${t.message}") }
+            }
+        }.start()
+    }
+
+    private fun pickAndDownload(
+        engines: List<ProCloud.CloudFileInfo>,
+        books: List<ProCloud.CloudFileInfo>,
+        bookOnly: Boolean,
+    ) {
+        val labels = mutableListOf<String>()
+        val targets = mutableListOf<Pair<String, ProCloud.CloudFileInfo>>()
+        if (!bookOnly) {
+            engines.forEach {
+                labels += "引擎 ${it.name} / ${it.fileName} (${it.size / 1024 / 1024}MB)"
+                targets += "engine" to it
+            }
+        }
+        books.forEach {
+            labels += "开局库 ${it.name} (${it.size / 1024}KB)"
+            targets += "book" to it
+        }
+        if (labels.isEmpty()) {
+            toast("无可下载项")
+            return
+        }
+        overlayDialog()
+            .setTitle("下载引擎 / 开局库")
+            .setItems(labels.toTypedArray()) { _, which ->
+                val (kind, info) = targets[which]
+                startDownload(kind, info)
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun startDownload(kind: String, info: ProCloud.CloudFileInfo) {
+        val dir = if (kind == "engine") File(filesDir, "engine") else BookManager.booksDir(this)
+        dir.mkdirs()
+        val dest = File(dir, info.fileName)
+        val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100 }
+        val pct = TextView(this).apply { text = "0%" }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 24, 48, 8)
+            addView(TextView(this@OverlayService).apply { text = info.name })
+            addView(bar)
+            addView(pct)
+        }
+        val dlg = overlayDialog()
+            .setTitle("下载 ${info.fileName}")
+            .setView(box)
+            .setCancelable(false)
+            .setNegativeButton("取消", null)
+            .create()
+        dlg.show()
+        Thread {
+            val ok = ProCloud.download(info.url, dest) { p ->
+                mainHandler.post {
+                    bar.progress = p
+                    pct.text = "$p%"
+                }
+            }
+            mainHandler.post {
+                dlg.dismiss()
+                if (ok) {
+                    if (kind == "book") {
+                        BookManager.openLocal(applicationContext, dest.name)
+                        bookText?.text = "开局库：" + BookManager.summary()
+                    }
+                    toast("下载完成 ${dest.name}")
+                } else {
+                    toast("下载失败")
+                }
+            }
+        }.start()
     }
 
     private fun moveHandler(event: MotionEvent, p: WindowManager.LayoutParams, panel: LinearLayout): Boolean {
@@ -523,19 +776,23 @@ class OverlayService : Service(), OverlayDisplay {
         return false
     }
 
-    private fun resizeHandler(event: MotionEvent, p: WindowManager.LayoutParams, panel: LinearLayout, maxWidth: Int): Boolean {
+    private fun resizeHandler(
+        event: MotionEvent,
+        p: WindowManager.LayoutParams,
+        panel: LinearLayout,
+        maxWidth: Int,
+    ): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 startX = event.rawX.toInt(); startY = event.rawY.toInt()
                 initialWidth = p.width
-                initialHeight = p.height
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
                 val width = initialWidth + (event.rawX.toInt() - startX)
-                val clampedWidth = width.coerceIn((maxWidth / 4).coerceAtLeast(180), maxWidth)
+                val clampedWidth = width.coerceIn((maxWidth / 3).coerceAtLeast(200), maxWidth)
                 p.width = clampedWidth
-                p.height = clampedWidth * 9 / 16
+                p.height = WindowManager.LayoutParams.WRAP_CONTENT
                 wm.updateViewLayout(panel, p)
                 return true
             }
@@ -613,8 +870,8 @@ class OverlayService : Service(), OverlayDisplay {
         setTextColor(Color.WHITE)
         stateListAnimator = null
         background = roundBackground(0xFF334154.toInt(), dp7().toFloat())
-        layoutParams = LinearLayout.LayoutParams(dp(16), dp(18)).apply {
-            marginStart = dp(3)
+        layoutParams = LinearLayout.LayoutParams(dp(18), dp(18)).apply {
+            marginStart = dp(2)
         }
         setOnClickListener { action() }
     }
@@ -639,7 +896,28 @@ class OverlayService : Service(), OverlayDisplay {
     }
 
     private fun setStatus(message: String) {
-        cloudText?.text = "状态\n" + message
+        statusText?.text = message
+    }
+
+    private fun applyOpacity() {
+        root?.alpha = opacity
+        mini?.alpha = opacity
+        boardRoot?.alpha = opacity
+        opacityText?.text = (opacity * 100).toInt().toString() + "%"
+    }
+
+    private fun setScoreBar(scoreCp: Int?) {
+        val fill = scoreBarFill ?: return
+        val lp = fill.layoutParams as LinearLayout.LayoutParams
+        val ratio = when {
+            scoreCp == null -> 0.5f
+            else -> {
+                val c = scoreCp.coerceIn(-1000, 1000)
+                0.05f + (c + 1000) / 2000f * 0.9f
+            }
+        }
+        lp.weight = ratio
+        fill.layoutParams = lp
     }
 
     private fun refreshButtons() {
@@ -648,7 +926,10 @@ class OverlayService : Service(), OverlayDisplay {
         autoOn = ConnectSession.autoMoveOn
         linkButton?.apply {
             text = if (connected) "已连接" else "连线"
-            background = roundBackground(if (connected) 0xFF2E7D32.toInt() else 0xFF39465A.toInt(), dp8().toFloat())
+            background = roundBackground(
+                if (connected) 0xFF2E7D32.toInt() else 0xFF39465A.toInt(),
+                dp8().toFloat(),
+            )
         }
         analyzeButton?.apply {
             text = when {
@@ -670,6 +951,46 @@ class OverlayService : Service(), OverlayDisplay {
         }
     }
 
+    private fun refreshMiniBoard() {
+        val board = ConnectSession.lastBoard
+        val result = ConnectSession.lastResult
+        val hints = ConnectSession.lastHintMoves
+        boardView?.position = board
+        boardView?.multiHints = hints
+        boardView?.statusLine = if (result.bestmove.isBlank()) ConnectSession.lastMessage
+        else buildProAnalysisLine(result, board)
+    }
+
+    private fun buildProAnalysisLine(result: EngineResult, board: Position?): String {
+        val score = when {
+            result.mateIn != null -> "绝杀(${result.mateIn})"
+            result.scoreCp != null -> "${result.scoreCp}"
+            else -> "-"
+        }
+        val npsK = if (result.nps > 0) "[${result.nps / 1000}k]" else ""
+        val pvText = if (board != null && result.pv.isNotEmpty()) {
+            val sim = board.copy()
+            result.pv.take(8).joinToString("  ") { m ->
+                val cn = try { Notation.moveToChinese(sim, m) } catch (_: Throwable) { m }
+                try { sim.applyIccs(m) } catch (_: Throwable) {}
+                cn
+            }
+        } else {
+            result.pv.joinToString(" ")
+        }
+        return "$score (${result.depth}) $npsK $pvText".trim()
+    }
+
+    private fun refreshBookLine() {
+        val hit = BookManager.lastHit
+        val board = ConnectSession.lastBoard
+        bookText?.text = if (hit != null && board != null) {
+            "开局库：${hit.chinese(board)}  ${hit.score}分  胜${"%.0f".format(hit.winRate)}%  [${hit.source}]"
+        } else {
+            "开局库：" + BookManager.summary()
+        }
+    }
+
     override fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean) {
         refreshButtons()
     }
@@ -680,77 +1001,68 @@ class OverlayService : Service(), OverlayDisplay {
     }
 
     override fun updateInfo(cloud: String, engineSummary: String, engineDetail: String) {
-        infoText?.text = buildString {
-            append("引擎\n")
-            append(engineSummary.ifBlank { "-" })
-            if (engineDetail.isNotBlank()) {
-                append("\n").append(engineDetail)
-            }
-        }
-        if (cloud.isNotBlank() && cloudText?.text?.startsWith("状态") != true) {
-            // 保留状态栏优先；无状态时再显示云库
-        }
+        analysisText?.text = engineDetail.ifBlank { engineSummary }.ifBlank { "皮卡鱼 —" }
+        if (cloud.isNotBlank()) bookText?.text = cloud
     }
 
     override fun updateOpacity(alpha: Float) {
         opacity = alpha.coerceIn(0.35f, 1f)
-        root?.alpha = opacity
-        mini?.alpha = opacity
-        opacityText?.text = (opacity * 100).toInt().toString() + "%"
+        applyOpacity()
     }
 
-    override fun updateConnect(autoOnValue: Boolean, delayMsValue: Int, sideLabel: String, running: Boolean, message: String) {
-        // ConnectSession 的识别循环在后台线程 publish，UI 必须回主线程
+    override fun updateConnect(
+        autoOnValue: Boolean,
+        delayMsValue: Int,
+        sideLabel: String,
+        running: Boolean,
+        message: String,
+    ) {
         mainHandler.post {
             autoOn = autoOnValue
-            delayMs = delayMsValue
             setStatus(message.ifBlank { sideLabel })
             val engReady = engine?.isReady == true
             val result = ConnectSession.lastResult
-            val engLine = if (!engReady) {
-                "启动中"
-            } else if (result.bestmove.isBlank()) {
-                if (message.contains("分析中")) "皮卡鱼思考中…" else "皮卡鱼 —"
-            } else {
-                val score = when {
-                    result.mateIn != null -> "杀${result.mateIn}"
-                    result.scoreCp != null -> "${result.scoreCp}分"
-                    else -> "-"
+            val board = ConnectSession.lastBoard
+            val bookHit = BookManager.lastHit
+            analysisText?.text = when {
+                bookHit != null && board != null && result.bestmove == bookHit.move ->
+                    "开局库 ${bookHit.chinese(board)}  ${bookHit.score}分  胜${"%.0f".format(bookHit.winRate)}%  [${bookHit.source}]"
+                !engReady -> "皮卡鱼启动中…"
+                result.bestmove.isBlank() -> {
+                    if (message.contains("分析中")) "皮卡鱼思考中…" else "皮卡鱼 —"
                 }
-                val board = ConnectSession.lastBoard
-                val cn = if (board != null) {
-                    try {
-                        Notation.moveToChinese(board, result.bestmove)
-                    } catch (_: Throwable) {
-                        result.bestmove
-                    }
-                } else {
-                    result.bestmove
-                }
-                "$cn  $score  深${result.depth}"
+                else -> buildProAnalysisLine(result, board)
             }
-            val detail = ConnectSession.lastRecognizedSummary
-            infoText?.text = "引擎\n$engLine" + if (detail.isNotBlank()) "\n$detail" else "\n$sideLabel"
+            setScoreBar(result.scoreCp)
+            refreshBookLine()
+            refreshMiniBoard()
             refreshButtons()
         }
     }
 
-    override fun updateMiniBoard(position: com.xqassist.core.Position?, hint: Quad?, status: String) {
-        // 当前悬浮窗样式不内嵌迷你棋盘
+    override fun updateMiniBoard(position: Position?, hint: Quad?, status: String) {
+        mainHandler.post {
+            boardView?.position = position
+            if (hint != null) boardView?.multiHints = listOf(hint)
+            boardView?.statusLine = status
+        }
     }
 
     override fun onDestroy() {
         if (ConnectSession.isRunning) ConnectSession.stop()
         if (actions === selfActions) actions = null
         overlayDisplay = null
-        // 主界面若还活着可重新接管；这里不断开引擎进程
-        root?.let { wm.removeView(it) }
-        mini?.let { wm.removeView(it) }
+        root?.let { runCatching { wm.removeView(it) } }
+        mini?.let { runCatching { wm.removeView(it) } }
+        boardRoot?.let { runCatching { wm.removeView(it) } }
         root = null
         mini = null
+        boardRoot = null
         params = null
         miniParams = null
-        infoText = null
+        boardParams = null
+        analysisText = null
+        bookText = null
         statusText = null
         depthText = null
         timeText = null
@@ -758,7 +1070,8 @@ class OverlayService : Service(), OverlayDisplay {
         linkButton = null
         analyzeButton = null
         playButton = null
-        cloudText = null
+        boardView = null
+        scoreBarFill = null
         super.onDestroy()
     }
 

@@ -3,8 +3,10 @@ package com.xqassist.connection
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
+import com.xqassist.book.BookManager
 import com.xqassist.capture.CaptureService
 import com.xqassist.core.Position
+import com.xqassist.core.Quad
 import com.xqassist.engine.EngineResult
 import com.xqassist.engine.UcciEngine
 import com.xqassist.overlay.OverlayService
@@ -101,6 +103,11 @@ object ConnectSession {
 
     @Volatile
     var lastRecognizedSummary: String = ""
+        private set
+
+    /** 迷你棋盘箭头：引擎 PV 前 2 步 */
+    @Volatile
+    var lastHintMoves: List<com.xqassist.core.Quad> = emptyList()
         private set
 
     /** 主界面可选监听（本地棋盘跟随）；悬浮窗由 publish 直接刷新 */
@@ -347,10 +354,52 @@ object ConnectSession {
         Log.i(TAG, "ok pieces=$pieceCount fen=$boardFen")
         publish("已正常识别 · ${lastRecognizedSummary}", State.RECOGNIZING, fen = boardFen, board = board)
 
-        if (boardFen == lastResult.fen && lastResult.bestmove.isNotBlank()) {
+        if (boardFen == lastResult.fen && lastResult.bestmove.isNotBlank() && BookManager.lastHit?.move == lastResult.bestmove) {
             publish("已正常识别 · 皮卡鱼:${resultText(lastResult)}", State.ANALYZING, fen = boardFen, board = board, result = lastResult)
             return
         }
+
+        // 开局库：本地优先；云库仅开局子多时查，避免中局反复打网
+        val bookHits = withContext(Dispatchers.IO) {
+            try {
+                val ctx = appContext ?: return@withContext emptyList()
+                val localOk = BookManager.mode == 1 && BookManager.bookName.isNotBlank()
+                if (localOk || pieceCount >= 26) {
+                    BookManager.query(ctx, board)
+                } else {
+                    emptyList()
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "book query failed", t)
+                emptyList()
+            }
+        }
+        if (bookHits.isNotEmpty()) {
+            val best = bookHits.first()
+            val bookHint = iccsToQuad(best.move)
+            lastHintMoves = listOfNotNull(bookHint)
+            lastResult = EngineResult(bestmove = best.move, fen = boardFen)
+            publish(
+                "已正常识别 · 开局库:${best.chinese(board)} ${best.score}分 [${best.source}] · ${lastRecognizedSummary}",
+                State.ANALYZING,
+                fen = boardFen,
+                board = board,
+                result = lastResult,
+            )
+            if (autoMoveOn && isRunning) {
+                val rect = boardRect ?: return
+                publish("开局库自动走子…", State.AUTO_PLAYING, fen = boardFen, board = board, result = lastResult)
+                val played = autoPlay(best.move, rect)
+                if (played) {
+                    lastAutoFen = boardFen
+                    lastAutoAt = System.currentTimeMillis()
+                    Thread.sleep(500)
+                    publish("已走 ${best.move}", State.AUTO_PLAYING, fen = boardFen, board = board, result = lastResult)
+                }
+            }
+            return
+        }
+        BookManager.clearHit()
 
         publish("皮卡鱼分析中…", State.ANALYZING, fen = boardFen, board = board)
         // 分析：固定短算，忽略深度/时间设置；仅出子(useEngineLimits)才用设置
@@ -358,12 +407,13 @@ object ConnectSession {
             fen = boardFen,
             movetimeMs = if (useEngineLimits) thinkMs else 800,
             depth = if (useEngineLimits) searchDepth else 0,
-            multiPv = 1,
+            multiPv = 3,
             infinite = false,
             history = emptyList(),
             onInfo = { partial ->
                 if (partial.bestmove.isNotBlank() && isRunning) {
                     lastResult = partial
+                    lastHintMoves = pvToHints(partial, board)
                     publish(
                         "已正常识别 · 皮卡鱼:${resultText(partial)}",
                         State.ANALYZING,
@@ -379,6 +429,7 @@ object ConnectSession {
             return
         }
         lastResult = result
+        lastHintMoves = pvToHints(result, board)
         publish("已正常识别 · 皮卡鱼:${resultText(result)}", State.ANALYZING, fen = boardFen, board = board, result = result)
 
         if (autoMoveOn && isRunning) {
@@ -408,6 +459,30 @@ object ConnectSession {
         lastFen = ""
         lastBoard = null
         lastRecognizedOk = false
+        lastHintMoves = emptyList()
+        BookManager.clearHit()
+    }
+
+    private fun iccsToQuad(iccs: String): Quad? {
+        val m = Regex("([a-i])([0-9])([a-i])([0-9])").matchEntire(iccs.trim().lowercase()) ?: return null
+        val fromFile = Position.FILE_NAMES.indexOf(m.groupValues[1])
+        val toFile = Position.FILE_NAMES.indexOf(m.groupValues[3])
+        val fromRank = 9 - m.groupValues[2].toInt()
+        val toRank = 9 - m.groupValues[4].toInt()
+        if (fromFile !in 0..8 || toFile !in 0..8) return null
+        return Quad(fromRank, fromFile, toRank, toFile)
+    }
+
+    private fun pvToHints(result: EngineResult, board: Position?): List<Quad> {
+        if (board == null || result.pv.isEmpty()) return emptyList()
+        val sim = board.copy()
+        val out = mutableListOf<Quad>()
+        for (m in result.pv.take(2)) {
+            val q = iccsToQuad(m) ?: break
+            out += q
+            try { sim.applyIccs(m) } catch (_: Throwable) { break }
+        }
+        return out
     }
 
     /** Pro 路径：YOLO 检测 → 子中心 → 外框 → 格点 → 帅位翻转 */
