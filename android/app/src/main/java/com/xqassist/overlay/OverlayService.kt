@@ -110,7 +110,6 @@ class OverlayService : Service(), OverlayDisplay {
     private var depthSpin: Spinner? = null
     private var timeSpin: Spinner? = null
     private var opacitySpin: Spinner? = null
-    private var limitHint: TextView? = null
 
     private var expanded = true
     private var startX = 0
@@ -307,10 +306,10 @@ class OverlayService : Service(), OverlayDisplay {
         }
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), dp(6), dp(10), dp(8))
+            setPadding(dp(8), dp(4), dp(8), dp(6))
             background = GradientDrawable().apply {
                 setColor(0xF218202A.toInt())
-                cornerRadius = dp(12).toFloat()
+                cornerRadius = dp(10).toFloat()
             }
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -321,8 +320,8 @@ class OverlayService : Service(), OverlayDisplay {
 
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val title = TextView(this).apply {
-            text = "≡ 象棋助手"
-            textSize = 12f
+            text = "≡ 助手"
+            textSize = 11f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER_VERTICAL
@@ -332,7 +331,6 @@ class OverlayService : Service(), OverlayDisplay {
         header.addView(miniButton("—") { setExpanded(false) })
         header.addView(miniButton("×") { selfActions.onCloseOverlay() })
         card.addView(header)
-        card.addView(spacer(dp(4)))
 
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         linkButton = actionButton("连线")
@@ -342,7 +340,6 @@ class OverlayService : Service(), OverlayDisplay {
         buttons.addView(analyzeButton)
         buttons.addView(playButton)
         card.addView(buttons)
-        card.addView(spacer(dp(4)))
 
         val ctrlRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -353,54 +350,48 @@ class OverlayService : Service(), OverlayDisplay {
         opacitySpin = spinner(opacityLabels, 1).also { ctrlRow.addView(weighted(it, 1f)) }
         card.addView(ctrlRow)
 
-        limitHint = TextView(this).apply {
-            text = "分析中：忽略深度/时间 · 点「出子」用设置算一着"
-            textSize = 10f
-            setTextColor(0x73FFFFFF.toInt())
-            setPadding(0, dp(2), 0, dp(4))
-        }
-        card.addView(limitHint!!)
-
         analysisText = TextView(this).apply {
             text = "皮卡鱼 —"
-            textSize = 12.5f
+            textSize = 12f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
-            setLineSpacing(dp(2).toFloat(), 1.05f)
-            maxLines = 4
+            setLineSpacing(dp(1).toFloat(), 1.05f)
+            maxLines = 3
+            setPadding(0, dp(3), 0, dp(2))
         }
         card.addView(analysisText!!)
 
         val barWrap = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(6)).apply {
-                topMargin = dp(4)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4)).apply {
+                topMargin = dp(2)
             }
             background = GradientDrawable().apply {
                 setColor(0xFF3B3A3C.toInt())
-                cornerRadius = dp(3).toFloat()
+                cornerRadius = dp(2).toFloat()
             }
         }
         scoreBarFill = View(this).apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.5f)
             background = GradientDrawable().apply {
                 setColor(0xFFE752C8.toInt())
-                cornerRadius = dp(3).toFloat()
+                cornerRadius = dp(2).toFloat()
             }
         }
         barWrap.addView(scoreBarFill!!)
         card.addView(barWrap)
-        card.addView(spacer(dp(4)))
 
         val bookRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(3), 0, 0)
         }
         bookText = TextView(this).apply {
             text = BookManager.summary()
-            textSize = 11.5f
+            textSize = 11f
             setTextColor(0xFF6AFFCD.toInt())
-            maxLines = 2
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         bookToggle = Button(this).apply {
@@ -409,7 +400,7 @@ class OverlayService : Service(), OverlayDisplay {
             includeFontPadding = false
             minHeight = 0
             minWidth = 0
-            setPadding(dp(8), dp(4), dp(8), dp(4))
+            setPadding(dp(7), dp(3), dp(7), dp(3))
             setTextColor(Color.WHITE)
             stateListAnimator = null
             setOnClickListener { selfActions.onBookEnableToggle() }
@@ -420,23 +411,26 @@ class OverlayService : Service(), OverlayDisplay {
 
         statusText = TextView(this).apply {
             text = "待命"
-            textSize = 11f
-            setTextColor(0xB3FFFFFF.toInt())
-            maxLines = 2
+            textSize = 10.5f
+            setTextColor(0x99FFFFFF.toInt())
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
         }
         card.addView(statusText!!)
 
         val resize = TextView(this).apply {
             text = "↘"
-            textSize = 14f
-            setTextColor(0xB3FFFFFF.toInt())
+            textSize = 12f
+            setTextColor(0x80FFFFFF.toInt())
             gravity = Gravity.END
-            setPadding(0, dp(2), 0, 0)
+            setPadding(0, dp(1), 0, 0)
         }
         card.addView(resize)
 
+        // 紧凑宽度：约屏宽 72%，避免挡住天天象棋棋盘
+        val baseW = (metrics.widthPixels * 0.72f).toInt().coerceIn(dp(240), dp(360))
         val p = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
+            baseW,
             WindowManager.LayoutParams.WRAP_CONTENT,
             if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else WindowManager.LayoutParams.TYPE_PHONE,
@@ -444,8 +438,8 @@ class OverlayService : Service(), OverlayDisplay {
             PixelFormat.TRANSLUCENT,
         )
         p.gravity = Gravity.TOP or Gravity.START
-        p.x = dp(4)
-        p.y = dp(72)
+        p.x = dp(6)
+        p.y = dp(64)
 
         title.setOnTouchListener { _, event -> moveHandler(event, p, panel) }
         resize.setOnTouchListener { _, event -> resizeHandler(event, p, panel, metrics.widthPixels - dp(8)) }
@@ -673,11 +667,6 @@ class OverlayService : Service(), OverlayDisplay {
         playButton?.apply {
             text = if (ConnectSession.lastRecognizedOk) "✓出子" else "出子"
         }
-        limitHint?.text = if (running) {
-            "分析中：忽略深度/时间 · 点「出子」用当前结果"
-        } else {
-            "分析关 · 点「出子」用深度/时间算一着"
-        }
         depthSpin?.alpha = if (running) 0.35f else 1f
         timeSpin?.alpha = if (running) 0.35f else 1f
     }
@@ -792,7 +781,6 @@ class OverlayService : Service(), OverlayDisplay {
         depthSpin = null
         timeSpin = null
         opacitySpin = null
-        limitHint = null
         scoreBarFill = null
         super.onDestroy()
     }

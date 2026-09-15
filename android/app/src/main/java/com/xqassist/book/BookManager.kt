@@ -140,8 +140,8 @@ object BookManager {
             } catch (t: Throwable) {
                 Log.w(TAG, "local query failed", t)
             }
-        }
-        if (hits.isEmpty()) {
+            // 本地模式：有无结果都停在这里，不自动回退云库
+        } else if (mode == 0) {
             val fen = pos.toFen()
             when (val r = cloud.query(fen)) {
                 is CloudBook.Result.Moves -> r.list.forEach {

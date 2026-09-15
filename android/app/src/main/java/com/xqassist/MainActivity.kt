@@ -1053,10 +1053,33 @@ class MainActivity : AppCompatActivity() {
         positionToken++
         controller.thinking = true
         val requestToken = positionToken
-        setStatusMessage("${sideName(side)}思考中…")
         val fen = controller.fen
         val history = controller.moves.map { it.iccs() }
+        val pos = controller.displayPos
         lifecycleScope.launch(Dispatchers.IO) {
+            // 启用开局库时优先走库着；本地模式不回退云库
+            if (BookManager.enabled) {
+                val hits = try {
+                    BookManager.query(this@MainActivity, pos)
+                } catch (_: Throwable) {
+                    emptyList()
+                }
+                val best = hits.firstOrNull()
+                if (best != null) {
+                    withContext(Dispatchers.Main) {
+                        controller.thinking = false
+                        if (requestToken != positionToken) return@withContext
+                        lastResult = EngineResult(bestmove = best.move, fen = fen)
+                        if (controller.applyEngineMove(best.move)) {
+                            afterMoveChanged("${sideName(side)}开局库：${best.chinese(pos)}")
+                        } else {
+                            statusMessage = "开局库着法无效：${best.move}"
+                            refreshUi()
+                        }
+                    }
+                    return@launch
+                }
+            }
             val result = requestEngine(fen, side, history = history)
             withContext(Dispatchers.Main) {
                 controller.thinking = false
@@ -1509,9 +1532,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun menuDialog() {
-        // 只保留工具栏上没有的入口，避免和顶栏重复
         val options = arrayOf(
-            "打开局面", "保存局面", "翻转局面", "连线", "设置",
+            "打开局面", "保存局面", "翻转局面", "连线",
+            "下载开局库", "下载引擎", "设置",
         )
         AlertDialog.Builder(this).setTitle("菜单").setItems(options) { _, which ->
             when (which) {
@@ -1519,7 +1542,9 @@ class MainActivity : AppCompatActivity() {
                 1 -> exportFenDialog()
                 2 -> { flipped = !flipped; refreshUi() }
                 3 -> linkDialog()
-                4 -> settingsDialog()
+                4 -> showBookDownloadDialog { v -> (v * resources.displayMetrics.density).toInt() }
+                5 -> showEngineDownloadDialog()
+                6 -> settingsDialog()
             }
         }.show()
     }
