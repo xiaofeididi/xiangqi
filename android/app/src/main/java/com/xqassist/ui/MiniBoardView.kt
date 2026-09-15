@@ -138,8 +138,8 @@ class MiniBoardView @JvmOverloads constructor(
         }
     }
 
-    private fun drawArrow(canvas: Canvas, x0: Float, y0: Float, x1: Float, y1: Float, color: Int, label: Int) {
-        val paint = Paint(hintPaint).apply { this.color = color }
+    private fun drawArrow(canvas: Canvas, x0: Float, y0: Float, x1: Float, y1: Float, arrowColor: Int, label: Int) {
+        val paint = Paint(hintPaint).apply { this.color = arrowColor }
         val dx = x1 - x0
         val dy = y1 - y0
         val len = kotlin.math.sqrt(dx * dx + dy * dy)
@@ -163,14 +163,15 @@ class MiniBoardView @JvmOverloads constructor(
         // Pro 在箭头中点标序号
         val midX = (sx + ex) / 2f
         val midY = (sy + ey) / 2f
-        canvas.drawCircle(midX, midY, 7f * density, Paint(paint).apply {
+        canvas.drawCircle(midX, midY, 7f * density, Paint().apply {
             style = Paint.Style.FILL
             color = Color.argb(160, 255, 255, 255)
         })
-        canvas.drawText(label.toString(), midX - 3f * density, midY + 3.5f * density, Paint(textPaint).apply {
+        canvas.drawText(label.toString(), midX - 3f * density, midY + 3.5f * density, Paint().apply {
             color = Color.rgb(20, 20, 20)
             textSize = 9f * density
             textAlign = Paint.Align.CENTER
+            isAntiAlias = true
         })
     }
 }

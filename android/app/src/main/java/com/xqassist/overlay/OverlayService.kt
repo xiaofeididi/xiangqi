@@ -28,6 +28,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import com.xqassist.book.BookManager
+import com.xqassist.book.CloudFileInfo
 import com.xqassist.book.ProCloud
 import com.xqassist.capture.CaptureService
 import com.xqassist.connection.ConnectSession
@@ -537,13 +538,15 @@ class OverlayService : Service(), OverlayDisplay {
         mini = miniView
         miniParams = mp
 
-        buildBoardWindow(dp)
+        buildBoardWindow()
         applyOpacity()
     }
 
-    private fun buildBoardWindow(dp: (Int) -> Int) {
-        val w = dp(100)
+    private fun buildBoardWindow() {
+        val density = resources.displayMetrics.density
+        val w = (100 * density).toInt()
         val h = (w * 1.2f).toInt()
+        fun dp(value: Int) = (value * density).toInt()
         val board = MiniBoardView(this)
         boardView = board
         val wrap = LinearLayout(this).apply {
@@ -687,12 +690,12 @@ class OverlayService : Service(), OverlayDisplay {
     }
 
     private fun pickAndDownload(
-        engines: List<ProCloud.CloudFileInfo>,
-        books: List<ProCloud.CloudFileInfo>,
+        engines: List<CloudFileInfo>,
+        books: List<CloudFileInfo>,
         bookOnly: Boolean,
     ) {
         val labels = mutableListOf<String>()
-        val targets = mutableListOf<Pair<String, ProCloud.CloudFileInfo>>()
+        val targets = mutableListOf<Pair<String, CloudFileInfo>>()
         if (!bookOnly) {
             engines.forEach {
                 labels += "引擎 ${it.name} / ${it.fileName} (${it.size / 1024 / 1024}MB)"
@@ -717,7 +720,7 @@ class OverlayService : Service(), OverlayDisplay {
             .show()
     }
 
-    private fun startDownload(kind: String, info: ProCloud.CloudFileInfo) {
+    private fun startDownload(kind: String, info: CloudFileInfo) {
         val dir = if (kind == "engine") File(filesDir, "engine") else BookManager.booksDir(this)
         dir.mkdirs()
         val dest = File(dir, info.fileName)
