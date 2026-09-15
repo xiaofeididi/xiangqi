@@ -225,20 +225,26 @@ class OverlayService : Service(), OverlayDisplay {
 
     override fun onCreate() {
         super.onCreate()
-        startAsForeground()
-        overlayDisplay = this
-        actions = selfActions
-        ConnectSession.attach(applicationContext)
-        BookManager.loadPrefs(applicationContext)
+        try {
+            startAsForeground()
+            overlayDisplay = this
+            actions = selfActions
+            ConnectSession.attach(applicationContext)
+            BookManager.loadPrefs(applicationContext)
 
-        LiveLinkService.onConnectedChanged = { mainHandler.post { refreshButtons() } }
+            LiveLinkService.onConnectedChanged = { mainHandler.post { refreshButtons() } }
 
-        buildUi()
-        ensureEngine()
-        refreshButtons()
-        analysisText?.text = "引擎启动中…"
-        bookText?.text = BookManager.summary()
-        setStatus(if (ConnectSession.boardRect == null) "未校准，分析时自动找盘" else "棋盘范围已就绪")
+            buildUi()
+            ensureEngine()
+            refreshButtons()
+            analysisText?.text = "皮卡鱼 —"
+            bookText?.text = BookManager.summary()
+            setStatus(if (ConnectSession.boardRect == null) "未校准，分析时自动找盘" else "棋盘范围已就绪")
+        } catch (t: Throwable) {
+            android.util.Log.e("Overlay", "onCreate failed", t)
+            Toast.makeText(this, "悬浮窗启动失败：${t.message}", Toast.LENGTH_LONG).show()
+            stopSelf()
+        }
     }
 
     private fun ensureYolo() {
@@ -493,6 +499,7 @@ class OverlayService : Service(), OverlayDisplay {
         params = p
         mini = miniView
         miniParams = mp
+        android.util.Log.i("Overlay", "ui added w=${p.width} y=${p.y}")
 
         depthSpin?.onItemSelectedListener = spinnerListener { selfActions.onDepthSelect(it) }
         timeSpin?.onItemSelectedListener = spinnerListener { selfActions.onTimeSelect(it) }
@@ -502,15 +509,17 @@ class OverlayService : Service(), OverlayDisplay {
         applyOpacity(0.85f)
     }
 
-    private fun spinner(labels: List<String>, selected: Int): Spinner =
-        Spinner(this).apply {
+    private fun spinner(labels: List<String>, selected: Int): Spinner {
+        val themed = ContextThemeWrapper(this, android.R.style.Theme_DeviceDefault_Light)
+        return Spinner(themed).apply {
             adapter = ArrayAdapter(
-                this@OverlayService,
+                themed,
                 android.R.layout.simple_spinner_dropdown_item,
                 labels,
             )
             setSelection(selected.coerceIn(0, labels.lastIndex))
         }
+    }
 
     private fun weighted(v: View, w: Float) = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, w).let {
         v.layoutParams = it
