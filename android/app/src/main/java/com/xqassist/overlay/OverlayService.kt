@@ -306,10 +306,10 @@ class OverlayService : Service(), OverlayDisplay {
         }
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(8), dp(4), dp(8), dp(6))
+            setPadding(dp(6), dp(3), dp(6), dp(4))
             background = GradientDrawable().apply {
-                setColor(0xF218202A.toInt())
-                cornerRadius = dp(10).toFloat()
+                setColor(0xE618202A.toInt())
+                cornerRadius = dp(8).toFloat()
             }
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -318,73 +318,75 @@ class OverlayService : Service(), OverlayDisplay {
         }
         panel.addView(card)
 
-        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        // 第1行：标题 + 动作 + 收起/关
+        val row1 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
         val title = TextView(this).apply {
-            text = "≡ 助手"
+            text = "助手"
             textSize = 11f
             setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE)
+            setTextColor(0xB3FFFFFF.toInt())
             gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            layoutParams = LinearLayout.LayoutParams(dp(28), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
-        header.addView(title)
-        header.addView(miniButton("—") { setExpanded(false) })
-        header.addView(miniButton("×") { selfActions.onCloseOverlay() })
-        card.addView(header)
+        row1.addView(title)
+        linkButton = tinyButton("连")
+        analyzeButton = tinyButton("析")
+        playButton = tinyButton("出")
+        row1.addView(linkButton)
+        row1.addView(analyzeButton)
+        row1.addView(playButton)
+        row1.addView(miniButton("—") { setExpanded(false) })
+        row1.addView(miniButton("×") { selfActions.onCloseOverlay() })
+        card.addView(row1)
 
-        val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        linkButton = actionButton("连线")
-        analyzeButton = actionButton("分析")
-        playButton = actionButton("出子")
-        buttons.addView(linkButton)
-        buttons.addView(analyzeButton)
-        buttons.addView(playButton)
-        card.addView(buttons)
-
+        // 第2行：下拉
         val ctrlRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setPadding(0, dp(2), 0, 0)
         }
         depthSpin = spinner(depthLabels, 0).also { ctrlRow.addView(weighted(it, 1f)) }
         timeSpin = spinner(timeLabels, 1).also { ctrlRow.addView(weighted(it, 1f)) }
         opacitySpin = spinner(opacityLabels, 1).also { ctrlRow.addView(weighted(it, 1f)) }
         card.addView(ctrlRow)
 
+        // 第3行：招法
         analysisText = TextView(this).apply {
             text = "皮卡鱼 —"
             textSize = 12f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
-            setLineSpacing(dp(1).toFloat(), 1.05f)
-            maxLines = 3
-            setPadding(0, dp(3), 0, dp(2))
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(0, dp(3), 0, dp(1))
         }
         card.addView(analysisText!!)
 
         val barWrap = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4)).apply {
-                topMargin = dp(2)
-            }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3))
             background = GradientDrawable().apply {
                 setColor(0xFF3B3A3C.toInt())
-                cornerRadius = dp(2).toFloat()
+                cornerRadius = dp(1.5f)
             }
         }
         scoreBarFill = View(this).apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.5f)
             background = GradientDrawable().apply {
                 setColor(0xFFE752C8.toInt())
-                cornerRadius = dp(2).toFloat()
+                cornerRadius = dp(1.5f)
             }
         }
         barWrap.addView(scoreBarFill!!)
         card.addView(barWrap)
 
+        // 第4行：开局库
         val bookRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(3), 0, 0)
+            setPadding(0, dp(2), 0, 0)
         }
         bookText = TextView(this).apply {
             text = BookManager.summary()
@@ -394,41 +396,32 @@ class OverlayService : Service(), OverlayDisplay {
             ellipsize = android.text.TextUtils.TruncateAt.END
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
-        bookToggle = Button(this).apply {
-            textSize = 10f
-            isAllCaps = false
-            includeFontPadding = false
-            minHeight = 0
-            minWidth = 0
-            setPadding(dp(7), dp(3), dp(7), dp(3))
-            setTextColor(Color.WHITE)
-            stateListAnimator = null
-            setOnClickListener { selfActions.onBookEnableToggle() }
-        }
+        bookToggle = tinyButton("库")
         bookRow.addView(bookText!!)
         bookRow.addView(bookToggle!!)
         card.addView(bookRow)
 
         statusText = TextView(this).apply {
-            text = "待命"
-            textSize = 10.5f
-            setTextColor(0x99FFFFFF.toInt())
+            text = ""
+            textSize = 10f
+            setTextColor(0x80FFFFFF.toInt())
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
+            visibility = View.GONE
         }
         card.addView(statusText!!)
 
         val resize = TextView(this).apply {
             text = "↘"
-            textSize = 12f
-            setTextColor(0x80FFFFFF.toInt())
+            textSize = 11f
+            setTextColor(0x66FFFFFF.toInt())
             gravity = Gravity.END
-            setPadding(0, dp(1), 0, 0)
+            setPadding(0, 0, 0, 0)
         }
         card.addView(resize)
 
-        // 紧凑宽度：约屏宽 72%，避免挡住天天象棋棋盘
-        val baseW = (metrics.widthPixels * 0.72f).toInt().coerceIn(dp(240), dp(360))
+        // 窄条：约 46% 屏宽，贴顶，尽量不盖棋盘
+        val baseW = (metrics.widthPixels * 0.46f).toInt().coerceIn(dp(170), dp(240))
         val p = WindowManager.LayoutParams(
             baseW,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -438,8 +431,8 @@ class OverlayService : Service(), OverlayDisplay {
             PixelFormat.TRANSLUCENT,
         )
         p.gravity = Gravity.TOP or Gravity.START
-        p.x = dp(6)
-        p.y = dp(64)
+        p.x = dp(4)
+        p.y = dp(4)
 
         title.setOnTouchListener { _, event -> moveHandler(event, p, panel) }
         resize.setOnTouchListener { _, event -> resizeHandler(event, p, panel, metrics.widthPixels - dp(8)) }
@@ -591,6 +584,23 @@ class OverlayService : Service(), OverlayDisplay {
         }
     }
 
+    private fun tinyButton(label: String): Button = Button(this).apply {
+        text = label
+        textSize = 11f
+        isAllCaps = false
+        includeFontPadding = false
+        minHeight = 0
+        minWidth = 0
+        setPadding(dp(6), dp(2), dp(6), dp(2))
+        setTextColor(Color.WHITE)
+        stateListAnimator = null
+        background = roundBackground(0xFF39465A.toInt(), dp(5).toFloat())
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { marginEnd = dp(3) }
+    }
+
     private fun miniButton(label: String, action: () -> Unit): Button = Button(this).apply {
         text = label
         textSize = 11f
@@ -651,21 +661,21 @@ class OverlayService : Service(), OverlayDisplay {
         val connected = LiveLinkService.isConnected
         val running = ConnectSession.isRunning
         linkButton?.apply {
-            text = if (connected) "已连接" else "连线"
+            text = if (connected) "连✓" else "连"
             background = roundBackground(
                 if (connected) 0xFF2E7D32.toInt() else 0xFF39465A.toInt(),
-                dp8().toFloat(),
+                dp(5).toFloat(),
             )
         }
         analyzeButton?.apply {
-            text = if (running) "分析·开" else "分析"
+            text = if (running) "析·" else "析"
             background = roundBackground(
                 if (running) 0xFF1565C0.toInt() else 0xFF39465A.toInt(),
-                dp8().toFloat(),
+                dp(5).toFloat(),
             )
         }
         playButton?.apply {
-            text = if (ConnectSession.lastRecognizedOk) "✓出子" else "出子"
+            text = if (ConnectSession.lastRecognizedOk) "出✓" else "出"
         }
         depthSpin?.alpha = if (running) 0.35f else 1f
         timeSpin?.alpha = if (running) 0.35f else 1f
@@ -676,15 +686,15 @@ class OverlayService : Service(), OverlayDisplay {
         val board = ConnectSession.lastBoard
         val name = BookManager.summary()
         bookText?.text = if (hit != null && board != null && BookManager.enabled) {
-            "$name · ${hit.chinese(board)}"
+            "${hit.chinese(board)} · $name"
         } else {
-            name + if (BookManager.enabled) "" else "（关）"
+            name + if (BookManager.enabled) "" else "·关"
         }
         bookToggle?.apply {
-            text = if (BookManager.enabled) "库·开" else "启用库"
+            text = if (BookManager.enabled) "库开" else "库"
             background = roundBackground(
                 if (BookManager.enabled) 0xFF2E7D32.toInt() else 0xFF334154.toInt(),
-                dp7().toFloat(),
+                dp(5).toFloat(),
             )
         }
     }
