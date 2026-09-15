@@ -104,6 +104,7 @@ object YoloDetector {
         // NMS
         val kept = nms(dets)
         lastDetectSummary = "yolo n=${kept.size} raw=${dets.size}"
+        Log.i(TAG, "detectPieces kept=${kept.size} raw=${dets.size}")
         return kept
     }
 

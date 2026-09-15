@@ -281,10 +281,12 @@ object ConnectSession {
         val elapsed = System.currentTimeMillis() - started
 
         if (recognized is RecognizeResult.NeedRect) {
+            clearStaleResult()
             publish(recognized.message, State.ERROR)
             return
         }
         if (recognized is RecognizeResult.Fail) {
+            clearStaleResult()
             publish(recognized.message, State.ERROR)
             return
         }
@@ -296,6 +298,7 @@ object ConnectSession {
         if (pieceCount < 4 || !hasWhiteKing || !hasBlackKing) {
             lastRecognizedOk = false
             lastRecognizedSummary = ""
+            clearStaleResult()
             if (pieceCount < 2) {
                 emptyBoardTicks++
                 if (emptyBoardTicks >= 3 && boardRect != null) {
@@ -309,7 +312,7 @@ object ConnectSession {
                 emptyBoardTicks = 0
             }
             val why = when {
-                pieceCount < 4 -> "子数过少(${pieceCount})·请清校准重找盘或回助手重新标定"
+                pieceCount < 4 -> "子数过少(${pieceCount})·请对准棋盘"
                 !hasWhiteKing && !hasBlackKing -> "未识别到双方将帅(${pieceCount}子)"
                 !hasWhiteKing -> "未识别到红帅(${pieceCount}子)"
                 else -> "未识别到黑将(${pieceCount}子)"
@@ -341,6 +344,7 @@ object ConnectSession {
         lastRecognizedOk = true
         lastRecognizedSummary = summarizeBoard(board, elapsed) +
             if (YoloDetector.isReady) " · ${YoloDetector.lastDetectSummary}" else ""
+        Log.i(TAG, "ok pieces=$pieceCount fen=$boardFen")
         publish("已正常识别 · ${lastRecognizedSummary}", State.RECOGNIZING, fen = boardFen, board = board)
 
         if (boardFen == lastResult.fen && lastResult.bestmove.isNotBlank()) {
@@ -396,6 +400,14 @@ object ConnectSession {
         data class Ok(val board: Position) : RecognizeResult()
         data class Fail(val message: String) : RecognizeResult()
         data class NeedRect(val message: String) : RecognizeResult()
+    }
+
+    /** 识别失败时清掉旧着法，避免悬浮窗一直显示上一步的「象四进六」 */
+    private fun clearStaleResult() {
+        lastResult = EngineResult()
+        lastFen = ""
+        lastBoard = null
+        lastRecognizedOk = false
     }
 
     /** Pro 路径：YOLO 检测 → 子中心 → 外框 → 格点 → 帅位翻转 */

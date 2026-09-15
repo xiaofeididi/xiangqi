@@ -262,7 +262,7 @@ class OverlayService : Service(), OverlayDisplay {
 
         buildUi()
         ensureEngine()
-        ensureYolo()
+        // YOLO 仅在点分析时再 init，降低内存、减少对天天象棋的挤压
         refreshButtons()
         updateControls(searchDepth, thinkSec)
         updateInfo("", "引擎启动中", ConnectSession.lastMessage.ifBlank { "待命" })
