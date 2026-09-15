@@ -1,6 +1,5 @@
 package com.xqassist.overlay
 
-import android.app.AlertDialog
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -22,16 +21,14 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import com.xqassist.book.BookManager
-import com.xqassist.book.CloudFileInfo
-import com.xqassist.book.ProCloud
 import com.xqassist.capture.CaptureService
 import com.xqassist.connection.ConnectSession
 import com.xqassist.connection.LiveLinkService
@@ -42,7 +39,6 @@ import com.xqassist.engine.EngineResult
 import com.xqassist.engine.UcciEngine
 import com.xqassist.vision.TemplatePieceReader
 import com.xqassist.vision.YoloDetector
-import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 interface OverlayDisplay {
@@ -54,12 +50,10 @@ interface OverlayDisplay {
 }
 
 /**
- * 悬浮窗 v0.5：
- * - 无迷你棋盘
- * - 标题仅 — / ×
- * - 分析=开/关；出子=独立；分析循环不用深度/时间
- * - 开局库行 +「启用库」
- * - 深度/时间/透明为下拉
+ * 悬浮窗：Pro 风格信息条
+ * - 无开局库控件（库在主界面/设置）
+ * - 分析开/关；出子独立
+ * - 深度/时间下拉；仅出子时生效
  */
 class OverlayService : Service(), OverlayDisplay {
 
@@ -71,7 +65,6 @@ class OverlayService : Service(), OverlayDisplay {
         fun onTimeSelect(index: Int)
         fun onOpacitySelect(index: Int)
         fun onCloseOverlay()
-        fun onBookEnableToggle()
     }
 
     companion object {
@@ -100,16 +93,13 @@ class OverlayService : Service(), OverlayDisplay {
     private var miniParams: WindowManager.LayoutParams? = null
 
     private var analysisText: TextView? = null
-    private var bookText: TextView? = null
     private var statusText: TextView? = null
     private var scoreBarFill: View? = null
     private var linkButton: Button? = null
     private var analyzeButton: Button? = null
     private var playButton: Button? = null
-    private var bookToggle: Button? = null
     private var depthSpin: Spinner? = null
     private var timeSpin: Spinner? = null
-    private var opacitySpin: Spinner? = null
 
     private var expanded = true
     private var startX = 0
@@ -118,12 +108,10 @@ class OverlayService : Service(), OverlayDisplay {
     private var initialY = 0
     private var initialWidth = 0
 
-    private val depthLabels = listOf("深·不限", "深·8", "深·12", "深·16")
+    private val depthLabels = listOf("深 不限", "深 8", "深 12", "深 16")
     private val depthValues = listOf(0, 8, 12, 16)
-    private val timeLabels = listOf("时·1s", "时·3s", "时·5s", "时·10s")
+    private val timeLabels = listOf("时 1s", "时 3s", "时 5s", "时 10s")
     private val timeValues = listOf(1, 3, 5, 10)
-    private val opacityLabels = listOf("透·100%", "透·85%", "透·70%")
-    private val opacityValues = listOf(1f, 0.85f, 0.7f)
 
     private val selfActions = object : Actions {
         override fun onLink() {
@@ -155,13 +143,13 @@ class OverlayService : Service(), OverlayDisplay {
                 return
             }
             if (!CaptureService.isRunning) {
-                setStatus("屏幕识别未开，请回助手授权截屏")
+                setStatus("截屏未授权")
                 toast("屏幕识别未开")
                 return
             }
             ConnectSession.useEngineLimits = false
             if (engine?.isReady != true) {
-                setStatus("引擎启动中…")
+                setStatus("引擎启动中")
                 ensureEngine()
                 toast("引擎启动中")
                 return
@@ -176,10 +164,8 @@ class OverlayService : Service(), OverlayDisplay {
             ConnectSession.provideReader(reader)
             if (ConnectSession.isRunning || ConnectSession.lastFen.isNotBlank()) {
                 ConnectSession.useEngineLimits = true
-                val d = depthValues[depthSpin?.selectedItemPosition ?: 0]
-                val t = timeValues[timeSpin?.selectedItemPosition ?: 1]
-                ConnectSession.searchDepth = d
-                ConnectSession.thinkMs = t * 1000
+                ConnectSession.searchDepth = depthValues[depthSpin?.selectedItemPosition ?: 0]
+                ConnectSession.thinkMs = timeValues[timeSpin?.selectedItemPosition ?: 1] * 1000
                 ConnectSession.playBestNow { ok ->
                     mainHandler.post {
                         toast(if (ok) "已出子" else "出子失败")
@@ -187,39 +173,25 @@ class OverlayService : Service(), OverlayDisplay {
                     }
                 }
             } else {
-                setStatus("先点「分析」")
-                toast("还没有识别局面")
+                toast("先点「析」开始分析")
             }
         }
 
         override fun onDepthSelect(index: Int) {
-            val d = depthValues.getOrElse(index) { 0 }
-            ConnectSession.searchDepth = d
-            toast(if (d == 0) "深度不限" else "深度 $d")
+            ConnectSession.searchDepth = depthValues.getOrElse(index) { 0 }
         }
 
         override fun onTimeSelect(index: Int) {
-            val t = timeValues.getOrElse(index) { 3 }
-            ConnectSession.thinkMs = t * 1000
-            toast("时间 ${t}s")
+            ConnectSession.thinkMs = timeValues.getOrElse(index) { 3 } * 1000
         }
 
         override fun onOpacitySelect(index: Int) {
-            val a = opacityValues.getOrElse(index) { 1f }
-            updateOpacity(a)
+            // 仅透明度，由主界面/设置也可调
         }
 
         override fun onCloseOverlay() {
             if (ConnectSession.isRunning) ConnectSession.stop()
             stopSelf()
-        }
-
-        override fun onBookEnableToggle() {
-            BookManager.enabled = !BookManager.enabled
-            BookManager.savePrefs(applicationContext)
-            BookManager.clearHit()
-            refreshBookLine()
-            toast(if (BookManager.enabled) "启用开局库：有库着优先走库" else "已关开局库")
         }
     }
 
@@ -231,15 +203,12 @@ class OverlayService : Service(), OverlayDisplay {
             actions = selfActions
             ConnectSession.attach(applicationContext)
             BookManager.loadPrefs(applicationContext)
-
             LiveLinkService.onConnectedChanged = { mainHandler.post { refreshButtons() } }
-
             buildUi()
             ensureEngine()
             refreshButtons()
             analysisText?.text = "皮卡鱼 —"
-            bookText?.text = BookManager.summary()
-            setStatus(if (ConnectSession.boardRect == null) "未校准，分析时自动找盘" else "棋盘范围已就绪")
+            setStatus("待命")
         } catch (t: Throwable) {
             android.util.Log.e("Overlay", "onCreate failed", t)
             Toast.makeText(this, "悬浮窗启动失败：${t.message}", Toast.LENGTH_LONG).show()
@@ -251,7 +220,7 @@ class OverlayService : Service(), OverlayDisplay {
         Thread {
             val ok = YoloDetector.init(applicationContext)
             mainHandler.post {
-                setStatus(if (ok) "YOLO 就绪" else "YOLO 失败:${YoloDetector.lastError.ifBlank { "?" }}")
+                setStatus(if (ok) "YOLO 就绪" else "YOLO 失败")
             }
         }.start()
     }
@@ -263,7 +232,7 @@ class OverlayService : Service(), OverlayDisplay {
             nm.createNotificationChannel(ch)
             val notif = Notification.Builder(this, "xq_overlay")
                 .setContentTitle("象棋助手")
-                .setContentText("悬浮窗连线分析运行中")
+                .setContentText("连线分析运行中")
                 .setSmallIcon(android.R.drawable.ic_menu_compass)
                 .build()
             if (Build.VERSION.SDK_INT >= 34) {
@@ -282,7 +251,6 @@ class OverlayService : Service(), OverlayDisplay {
             engine = ready
             ConnectSession.provideEngine(ready)
             ConnectSession.provideReader(reader)
-            setStatus("皮卡鱼就绪")
             return
         }
         if (!engineStarting.compareAndSet(false, true)) return
@@ -293,143 +261,123 @@ class OverlayService : Service(), OverlayDisplay {
                     engine = eng
                     ConnectSession.provideEngine(eng)
                     ConnectSession.provideReader(reader)
-                    setStatus("皮卡鱼就绪")
-                } else {
-                    setStatus("皮卡鱼启动失败")
                 }
                 refreshButtons()
             }
         }
     }
 
-    private fun buildUi() {
-        val metrics = resources.displayMetrics
-        fun dp(value: Int) = (value * metrics.density).toInt()
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
+    private fun buildUi() {
+        val density = resources.displayMetrics.density
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.TRANSPARENT)
         }
+
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(6), dp(3), dp(6), dp(4))
+            setPadding(dp(10), dp(8), dp(10), dp(8))
             background = GradientDrawable().apply {
-                setColor(0xE618202A.toInt())
-                cornerRadius = dp(8).toFloat()
+                setColor(0xF01B2430.toInt())
+                cornerRadius = 12f * density
+                setStroke(dp(1), 0x33FFFFFF)
             }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            )
         }
         panel.addView(card)
 
-        // 第1行：标题 + 动作 + 收起/关
-        val row1 = LinearLayout(this).apply {
+        // 标题 + 操作
+        val top = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
         val title = TextView(this).apply {
-            text = "助手"
+            text = "象棋助手"
             textSize = 11f
             setTypeface(typeface, Typeface.BOLD)
-            setTextColor(0xB3FFFFFF.toInt())
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(dp(28), ViewGroup.LayoutParams.WRAP_CONTENT)
+            setTextColor(0x99FFFFFF.toInt())
+            letterSpacing = 0.08f
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
-        row1.addView(title)
-        linkButton = tinyButton("连")
-        analyzeButton = tinyButton("析")
-        playButton = tinyButton("出")
-        row1.addView(linkButton)
-        row1.addView(analyzeButton)
-        row1.addView(playButton)
-        row1.addView(miniButton("—") { setExpanded(false) })
-        row1.addView(miniButton("×") { selfActions.onCloseOverlay() })
-        card.addView(row1)
+        top.addView(title)
+        linkButton = chip("连")
+        analyzeButton = chip("析")
+        playButton = chip("出")
+        top.addView(linkButton)
+        top.addView(analyzeButton)
+        top.addView(playButton)
+        top.addView(chip("—") { setExpanded(false) })
+        top.addView(chip("×") { selfActions.onCloseOverlay() })
+        card.addView(top)
 
-        // 第2行：下拉
-        val ctrlRow = LinearLayout(this).apply {
+        // 设置行
+        val limits = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(2), 0, 0)
+            setPadding(0, dp(6), 0, 0)
         }
-        depthSpin = spinner(depthLabels, 0).also { ctrlRow.addView(weighted(it, 1f)) }
-        timeSpin = spinner(timeLabels, 1).also { ctrlRow.addView(weighted(it, 1f)) }
-        opacitySpin = spinner(opacityLabels, 1).also { ctrlRow.addView(weighted(it, 1f)) }
-        card.addView(ctrlRow)
+        depthSpin = makeSpinner(depthLabels, 0).also {
+            limits.addView(it, LinearLayout.LayoutParams(0, dp(28), 1f).apply { marginEnd = dp(4) })
+        }
+        timeSpin = makeSpinner(timeLabels, 1).also {
+            limits.addView(it, LinearLayout.LayoutParams(0, dp(28), 1f))
+        }
+        card.addView(limits)
 
-        // 第3行：招法
+        // 招法
         analysisText = TextView(this).apply {
             text = "皮卡鱼 —"
-            textSize = 12f
+            textSize = 13f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
-            maxLines = 2
+            maxLines = 3
             ellipsize = android.text.TextUtils.TruncateAt.END
-            setPadding(0, dp(3), 0, dp(1))
+            setPadding(0, dp(8), 0, dp(4))
         }
         card.addView(analysisText!!)
 
-        val barWrap = LinearLayout(this).apply {
+        // 分数条
+        val barBg = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3))
             background = GradientDrawable().apply {
-                setColor(0xFF3B3A3C.toInt())
-                cornerRadius = 1.5f * resources.displayMetrics.density
+                setColor(0xFF2A3340.toInt())
+                cornerRadius = 2f * density
             }
         }
         scoreBarFill = View(this).apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.5f)
             background = GradientDrawable().apply {
-                setColor(0xFFE752C8.toInt())
-                cornerRadius = 1.5f * resources.displayMetrics.density
+                setColor(0xFF3DDC97.toInt())
+                cornerRadius = 2f * density
             }
         }
-        barWrap.addView(scoreBarFill!!)
-        card.addView(barWrap)
-
-        // 第4行：开局库
-        val bookRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(2), 0, 0)
-        }
-        bookText = TextView(this).apply {
-            text = BookManager.summary()
-            textSize = 11f
-            setTextColor(0xFF6AFFCD.toInt())
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        bookToggle = tinyButton("库")
-        bookRow.addView(bookText!!)
-        bookRow.addView(bookToggle!!)
-        card.addView(bookRow)
+        barBg.addView(scoreBarFill!!)
+        card.addView(barBg)
 
         statusText = TextView(this).apply {
             text = ""
             textSize = 10f
-            setTextColor(0x80FFFFFF.toInt())
+            setTextColor(0x88FFFFFF.toInt())
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
-            visibility = View.GONE
+            setPadding(0, dp(4), 0, 0)
         }
         card.addView(statusText!!)
 
-        val resize = TextView(this).apply {
-            text = "↘"
-            textSize = 11f
-            setTextColor(0x66FFFFFF.toInt())
+        val grip = TextView(this).apply {
+            text = "···"
+            textSize = 10f
+            setTextColor(0x55FFFFFF.toInt())
             gravity = Gravity.END
-            setPadding(0, 0, 0, 0)
+            setPadding(0, dp(2), 0, 0)
         }
-        card.addView(resize)
+        card.addView(grip)
 
-        // 窄条：约 46% 屏宽，贴顶，尽量不盖棋盘
-        val baseW = (metrics.widthPixels * 0.46f).toInt().coerceIn(dp(170), dp(240))
+        // 窄条贴顶
+        val w = (resources.displayMetrics.widthPixels * 0.52f).toInt().coerceIn(dp(200), dp(280))
         val p = WindowManager.LayoutParams(
-            baseW,
+            w,
             WindowManager.LayoutParams.WRAP_CONTENT,
             if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else WindowManager.LayoutParams.TYPE_PHONE,
@@ -437,25 +385,28 @@ class OverlayService : Service(), OverlayDisplay {
             PixelFormat.TRANSLUCENT,
         )
         p.gravity = Gravity.TOP or Gravity.START
-        p.x = dp(4)
-        p.y = dp(4)
+        p.x = dp(6)
+        p.y = dp(8)
 
-        title.setOnTouchListener { _, event -> moveHandler(event, p, panel) }
-        resize.setOnTouchListener { _, event -> resizeHandler(event, p, panel, metrics.widthPixels - dp(8)) }
+        title.setOnTouchListener { _, e -> moveHandler(e, p, panel) }
+        grip.setOnTouchListener { _, e -> resizeHandler(e, p, panel) }
 
         linkButton?.setOnClickListener { selfActions.onLink() }
         analyzeButton?.setOnClickListener { selfActions.onAnalyze() }
         playButton?.setOnClickListener { selfActions.onPlayMove() }
+
+        depthSpin?.onItemSelectedListener = sel { selfActions.onDepthSelect(it) }
+        timeSpin?.onItemSelectedListener = sel { selfActions.onTimeSelect(it) }
 
         val miniView = TextView(this).apply {
             text = "≡"
             textSize = 12f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setPadding(dp(10), dp(8), dp(10), dp(8))
+            setPadding(dp(12), dp(8), dp(12), dp(8))
             background = GradientDrawable().apply {
-                setColor(0xE618202A.toInt())
-                cornerRadius = dp(12).toFloat()
+                setColor(0xF01B2430.toInt())
+                cornerRadius = 12f * density
             }
             visibility = View.GONE
         }
@@ -470,23 +421,23 @@ class OverlayService : Service(), OverlayDisplay {
         mp.gravity = Gravity.TOP or Gravity.START
         mp.x = p.x
         mp.y = p.y
-        miniView.setOnTouchListener { _, event ->
-            when (event.actionMasked) {
+        miniView.setOnTouchListener { _, e ->
+            when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    startX = event.rawX.toInt(); startY = event.rawY.toInt()
+                    startX = e.rawX.toInt(); startY = e.rawY.toInt()
                     initialX = mp.x; initialY = mp.y
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    mp.x = initialX + (event.rawX.toInt() - startX)
-                    mp.y = initialY + (event.rawY.toInt() - startY)
+                    mp.x = initialX + (e.rawX.toInt() - startX)
+                    mp.y = initialY + (e.rawY.toInt() - startY)
                     wm.updateViewLayout(miniView, mp)
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    val moved = kotlin.math.abs(event.rawX.toInt() - startX) < dp(8) &&
-                        kotlin.math.abs(event.rawY.toInt() - startY) < dp(8)
-                    if (moved) setExpanded(true)
+                    if (kotlin.math.abs(e.rawX.toInt() - startX) < dp(8) &&
+                        kotlin.math.abs(e.rawY.toInt() - startY) < dp(8)
+                    ) setExpanded(true)
                     true
                 }
                 else -> false
@@ -499,38 +450,46 @@ class OverlayService : Service(), OverlayDisplay {
         params = p
         mini = miniView
         miniParams = mp
-        android.util.Log.i("Overlay", "ui added w=${p.width} y=${p.y}")
-
-        depthSpin?.onItemSelectedListener = spinnerListener { selfActions.onDepthSelect(it) }
-        timeSpin?.onItemSelectedListener = spinnerListener { selfActions.onTimeSelect(it) }
-        opacitySpin?.onItemSelectedListener = spinnerListener { selfActions.onOpacitySelect(it) }
-
-        refreshBookLine()
-        applyOpacity(0.85f)
+        android.util.Log.i("Overlay", "ui added w=$w")
     }
 
-    private fun spinner(labels: List<String>, selected: Int): Spinner {
+    private fun chip(label: String, extra: (() -> Unit)? = null): Button = Button(this).apply {
+        text = label
+        textSize = 11f
+        isAllCaps = false
+        includeFontPadding = false
+        minHeight = 0
+        minWidth = 0
+        setPadding(dp(8), dp(3), dp(8), dp(3))
+        setTextColor(Color.WHITE)
+        stateListAnimator = null
+        background = GradientDrawable().apply {
+            setColor(0xFF2F3B4A.toInt())
+            cornerRadius = 8f * resources.displayMetrics.density
+        }
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { marginStart = dp(3) }
+        extra?.let { setOnClickListener { it() } }
+    }
+
+    private fun makeSpinner(labels: List<String>, selected: Int): Spinner {
         val themed = ContextThemeWrapper(this, android.R.style.Theme_DeviceDefault_Light)
         return Spinner(themed).apply {
-            adapter = ArrayAdapter(
-                themed,
-                android.R.layout.simple_spinner_dropdown_item,
-                labels,
-            )
+            adapter = ArrayAdapter(themed, android.R.layout.simple_spinner_dropdown_item, labels)
             setSelection(selected.coerceIn(0, labels.lastIndex))
+            background = GradientDrawable().apply {
+                setColor(0x22FFFFFF)
+                cornerRadius = 6f * resources.displayMetrics.density
+            }
+            setPadding(dp(4), 0, dp(4), 0)
         }
     }
 
-    private fun weighted(v: View, w: Float) = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, w).let {
-        v.layoutParams = it
-        v
-    }
-
-    private fun spinnerListener(cb: (Int) -> Unit) = object : android.widget.AdapterView.OnItemSelectedListener {
-        override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
-            cb(position)
-        }
-        override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+    private fun sel(cb: (Int) -> Unit) = object : AdapterView.OnItemSelectedListener {
+        override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) = cb(position)
+        override fun onNothingSelected(parent: AdapterView<*>?) {}
     }
 
     private fun moveHandler(event: MotionEvent, p: WindowManager.LayoutParams, panel: LinearLayout): Boolean {
@@ -550,12 +509,7 @@ class OverlayService : Service(), OverlayDisplay {
         return false
     }
 
-    private fun resizeHandler(
-        event: MotionEvent,
-        p: WindowManager.LayoutParams,
-        panel: LinearLayout,
-        maxWidth: Int,
-    ): Boolean {
+    private fun resizeHandler(event: MotionEvent, p: WindowManager.LayoutParams, panel: LinearLayout): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 startX = event.rawX.toInt(); startY = event.rawY.toInt()
@@ -563,8 +517,7 @@ class OverlayService : Service(), OverlayDisplay {
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
-                val width = initialWidth + (event.rawX.toInt() - startX)
-                p.width = width.coerceIn((maxWidth / 3).coerceAtLeast(200), maxWidth)
+                p.width = (initialWidth + (event.rawX.toInt() - startX)).coerceIn(dp(180), dp(360))
                 p.height = WindowManager.LayoutParams.WRAP_CONTENT
                 wm.updateViewLayout(panel, p)
                 return true
@@ -579,90 +532,21 @@ class OverlayService : Service(), OverlayDisplay {
         mini?.visibility = if (value) View.GONE else View.VISIBLE
     }
 
-    private fun actionButton(label: String): Button = Button(this).apply {
-        text = label
-        textSize = 12f
-        isAllCaps = false
-        includeFontPadding = false
-        setPadding(0, dp8(), 0, dp8())
-        setTextColor(Color.WHITE)
-        stateListAnimator = null
-        background = roundBackground(0xFF39465A.toInt(), dp8().toFloat())
-        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-            marginEnd = dp8()
-        }
+    private fun toast(msg: String) {
+        Toast.makeText(applicationContext, msg, Toast.LENGTH_SHORT).show()
     }
 
-    private fun tinyButton(label: String): Button = Button(this).apply {
-        text = label
-        textSize = 11f
-        isAllCaps = false
-        includeFontPadding = false
-        minHeight = 0
-        minWidth = 0
-        setPadding(dp(6), dp(2), dp(6), dp(2))
-        setTextColor(Color.WHITE)
-        stateListAnimator = null
-        background = roundBackground(0xFF39465A.toInt(), dp(5).toFloat())
-        layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-        ).apply { marginEnd = dp(3) }
-    }
-
-    private fun miniButton(label: String, action: () -> Unit): Button = Button(this).apply {
-        text = label
-        textSize = 11f
-        isAllCaps = false
-        includeFontPadding = false
-        minHeight = 0
-        minWidth = 0
-        setPadding(dp(8), 0, dp(8), 0)
-        setTextColor(Color.WHITE)
-        stateListAnimator = null
-        background = roundBackground(0xFF334154.toInt(), dp7().toFloat())
-        layoutParams = LinearLayout.LayoutParams(dp(24), dp(22)).apply { marginStart = dp(3) }
-        setOnClickListener { action() }
-    }
-
-    private fun roundBackground(color: Int, radius: Float): GradientDrawable = GradientDrawable().apply {
-        setColor(color)
-        cornerRadius = radius
-    }
-
-    private fun spacer(height: Int): View = View(this).apply {
-        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height)
-    }
-
-    private fun dp8(): Int = (8 * resources.displayMetrics.density).toInt()
-    private fun dp7(): Int = (7 * resources.displayMetrics.density).toInt()
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
-
-    private fun toast(message: String) {
-        Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
-    }
-
-    private fun setStatus(message: String) {
-        statusText?.text = message
-    }
-
-    private fun applyOpacity(a: Float) {
-        val alpha = a.coerceIn(0.35f, 1f)
-        root?.alpha = alpha
-        mini?.alpha = alpha
+    private fun setStatus(msg: String) {
+        statusText?.text = msg
     }
 
     private fun setScoreBar(scoreCp: Int?) {
         val fill = scoreBarFill ?: return
         val lp = fill.layoutParams as LinearLayout.LayoutParams
-        val ratio = when {
+        lp.weight = when {
             scoreCp == null -> 0.5f
-            else -> {
-                val c = scoreCp.coerceIn(-1000, 1000)
-                0.05f + (c + 1000) / 2000f * 0.9f
-            }
+            else -> 0.08f + (scoreCp.coerceIn(-1000, 1000) + 1000) / 2000f * 0.84f
         }
-        lp.weight = ratio
         fill.layoutParams = lp
     }
 
@@ -671,111 +555,78 @@ class OverlayService : Service(), OverlayDisplay {
         val running = ConnectSession.isRunning
         linkButton?.apply {
             text = if (connected) "连✓" else "连"
-            background = roundBackground(
-                if (connected) 0xFF2E7D32.toInt() else 0xFF39465A.toInt(),
-                dp(5).toFloat(),
-            )
+            background = GradientDrawable().apply {
+                setColor(if (connected) 0xFF2E7D32.toInt() else 0xFF2F3B4A.toInt())
+                cornerRadius = 8f * resources.displayMetrics.density
+            }
         }
         analyzeButton?.apply {
             text = if (running) "析·" else "析"
-            background = roundBackground(
-                if (running) 0xFF1565C0.toInt() else 0xFF39465A.toInt(),
-                dp(5).toFloat(),
-            )
+            background = GradientDrawable().apply {
+                setColor(if (running) 0xFF1565C0.toInt() else 0xFF2F3B4A.toInt())
+                cornerRadius = 8f * resources.displayMetrics.density
+            }
         }
-        playButton?.apply {
-            text = if (ConnectSession.lastRecognizedOk) "出✓" else "出"
-        }
-        depthSpin?.alpha = if (running) 0.35f else 1f
-        timeSpin?.alpha = if (running) 0.35f else 1f
+        playButton?.text = if (ConnectSession.lastRecognizedOk) "出✓" else "出"
+        depthSpin?.alpha = if (running) 0.4f else 1f
+        timeSpin?.alpha = if (running) 0.4f else 1f
     }
 
-    private fun refreshBookLine() {
-        val hit = BookManager.lastHit
-        val board = ConnectSession.lastBoard
-        val name = BookManager.summary()
-        bookText?.text = if (hit != null && board != null && BookManager.enabled) {
-            "${hit.chinese(board)} · $name"
-        } else {
-            name + if (BookManager.enabled) "" else "·关"
-        }
-        bookToggle?.apply {
-            text = if (BookManager.enabled) "库开" else "库"
-            background = roundBackground(
-                if (BookManager.enabled) 0xFF2E7D32.toInt() else 0xFF334154.toInt(),
-                dp(5).toFloat(),
-            )
-        }
-    }
-
-    private fun buildProAnalysisLine(result: EngineResult, board: Position?): String {
+    private fun buildLine(result: EngineResult, board: Position?): String {
         val score = when {
-            result.mateIn != null -> "绝杀(${result.mateIn})"
+            result.mateIn != null -> "绝杀${result.mateIn}"
             result.scoreCp != null -> "${result.scoreCp}"
             else -> "-"
         }
-        val npsK = if (result.nps > 0) "[${result.nps / 1000}k]" else ""
-        val pvText = if (board != null && result.pv.isNotEmpty()) {
+        val nps = if (result.nps > 0) " ${result.nps / 1000}k" else ""
+        val pv = if (board != null && result.pv.isNotEmpty()) {
             val sim = board.copy()
-            result.pv.take(8).joinToString("  ") { m ->
+            result.pv.take(6).joinToString(" ") { m ->
                 val cn = try { Notation.moveToChinese(sim, m) } catch (_: Throwable) { m }
                 try { sim.applyIccs(m) } catch (_: Throwable) {}
                 cn
             }
-        } else {
-            result.pv.joinToString(" ")
-        }
-        return "$score (${result.depth}) $npsK $pvText".trim()
+        } else result.pv.joinToString(" ")
+        return "$score (${result.depth})$nps\n$pv".trim()
     }
 
-    override fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean) {
-        refreshButtons()
-    }
+    override fun updateActions(linkOn: Boolean, analysisOn: Boolean, thinking: Boolean) = refreshButtons()
 
     override fun updateControls(depth: Int, seconds: Int) {
-        val di = depthValues.indexOf(depth).takeIf { it >= 0 } ?: 0
-        val ti = timeValues.indexOf(seconds).takeIf { it >= 0 } ?: 1
-        depthSpin?.setSelection(di)
-        timeSpin?.setSelection(ti)
+        depthValues.indexOf(depth).takeIf { it >= 0 }?.let { depthSpin?.setSelection(it) }
+        timeValues.indexOf(seconds).takeIf { it >= 0 }?.let { timeSpin?.setSelection(it) }
     }
 
     override fun updateInfo(cloud: String, engineSummary: String, engineDetail: String) {
         analysisText?.text = engineDetail.ifBlank { engineSummary }.ifBlank { "皮卡鱼 —" }
-        if (cloud.isNotBlank()) bookText?.text = cloud
     }
 
     override fun updateOpacity(alpha: Float) {
-        applyOpacity(alpha)
-        val oi = opacityValues.indexOfFirst { kotlin.math.abs(it - alpha) < 0.02f }
-        if (oi >= 0) opacitySpin?.setSelection(oi)
+        val a = alpha.coerceIn(0.35f, 1f)
+        root?.alpha = a
+        mini?.alpha = a
     }
 
     override fun updateConnect(
-        autoOnValue: Boolean,
-        delayMsValue: Int,
+        autoOn: Boolean,
+        delayMs: Int,
         sideLabel: String,
         running: Boolean,
         message: String,
     ) {
         mainHandler.post {
             setStatus(message.ifBlank { sideLabel })
-            val engReady = engine?.isReady == true
             val result = ConnectSession.lastResult
             val board = ConnectSession.lastBoard
-            val bookHit = BookManager.lastHit
-            val resultFresh = result.bestmove.isNotBlank() &&
+            val fresh = result.bestmove.isNotBlank() &&
                 result.fen.isNotBlank() &&
                 result.fen == ConnectSession.lastFen
             analysisText?.text = when {
-                BookManager.enabled && bookHit != null && board != null && resultFresh &&
-                    result.bestmove == bookHit.move ->
-                    "开局库 ${bookHit.chinese(board)}  ${bookHit.score}分  [${bookHit.source}]"
-                !engReady -> "皮卡鱼启动中…"
-                !resultFresh -> if (message.contains("分析中")) "皮卡鱼思考中…" else "皮卡鱼 —"
-                else -> buildProAnalysisLine(result, board)
+                engine?.isReady != true -> "皮卡鱼启动中…"
+                !fresh -> if (message.contains("分析中")) "思考中…" else "皮卡鱼 —"
+                else -> buildLine(result, board)
             }
-            setScoreBar(if (resultFresh) result.scoreCp else null)
-            refreshBookLine()
+            setScoreBar(if (fresh) result.scoreCp else null)
             refreshButtons()
         }
     }
@@ -786,21 +637,10 @@ class OverlayService : Service(), OverlayDisplay {
         overlayDisplay = null
         root?.let { runCatching { wm.removeView(it) } }
         mini?.let { runCatching { wm.removeView(it) } }
-        root = null
-        mini = null
-        params = null
-        miniParams = null
-        analysisText = null
-        bookText = null
-        statusText = null
-        linkButton = null
-        analyzeButton = null
-        playButton = null
-        bookToggle = null
-        depthSpin = null
-        timeSpin = null
-        opacitySpin = null
-        scoreBarFill = null
+        root = null; mini = null; params = null; miniParams = null
+        analysisText = null; statusText = null; scoreBarFill = null
+        linkButton = null; analyzeButton = null; playButton = null
+        depthSpin = null; timeSpin = null
         super.onDestroy()
     }
 
