@@ -41,6 +41,7 @@ import com.xqassist.book.ProCloud
 import com.xqassist.engine.CloudBook
 import com.xqassist.engine.BookMove
 import com.xqassist.engine.EngineHolder
+import com.xqassist.engine.EngineInstaller
 import com.xqassist.engine.EngineResult
 import com.xqassist.engine.UcciEngine
 import com.xqassist.game.GameController
@@ -511,7 +512,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, 4, 0, 2)
         })
         enginePage.addView(TextView(this).apply {
-            text = if (EngineHolder.engine?.isReady == true) "内置皮卡鱼 · 运行中" else "内置皮卡鱼 · 启动中…"
+            text = EngineHolder.engineLabel + if (EngineHolder.engine?.isReady == true) " · 运行中" else " · 启动中…"
             textSize = 14f
             setPadding(0, 2, 0, 6)
         })
@@ -711,8 +712,9 @@ class MainActivity : AppCompatActivity() {
                                 runOnUiThread {
                                     if (ok) {
                                         makeExec(dir)
-                                        toast("引擎下载完成：$name（重启后生效）")
-                                        buildEnginePage { v -> (v * resources.displayMetrics.density).toInt() }
+                                        EngineInstaller.setPreferredName(this@MainActivity, name)
+                                        toast("引擎下载完成：$name（请在设置里切换）")
+                                        buildSettingsPage { v -> (v * resources.displayMetrics.density).toInt() }
                                     } else {
                                         toast("引擎下载失败")
                                     }
@@ -829,9 +831,10 @@ class MainActivity : AppCompatActivity() {
 
         // —— 引擎下载 / 切换 ——
         settingsPage.addView(sectionTitle("引擎下载 / 切换", toPx))
-        val engDir = java.io.File(filesDir, "engine").apply { mkdirs() }
-        val engNames = mutableListOf("内置皮卡鱼")
-        engDir.listFiles { f -> f.isDirectory }?.forEach { engNames += it.name }
+        val engNames = mutableListOf("builtin")
+        engNames += EngineInstaller.listDownloaded(this)
+        val engLabels = engNames.map { if (it == "builtin") "内置皮卡鱼" else it }
+        val currentEng = EngineInstaller.preferredName(this)
         val engRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -846,11 +849,34 @@ class MainActivity : AppCompatActivity() {
             adapter = android.widget.ArrayAdapter(
                 this@MainActivity,
                 android.R.layout.simple_spinner_dropdown_item,
-                engNames + "… 下载引擎",
+                engLabels + "… 下载引擎",
             )
+            val selIdx = engNames.indexOf(currentEng).coerceAtLeast(0)
+            setSelection(selIdx)
             onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
                 override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
-                    if (position == engNames.size) showEngineDownloadDialog()
+                    if (position == engNames.size) {
+                        showEngineDownloadDialog()
+                        return
+                    }
+                    val name = engNames[position]
+                    if (name != currentEng) {
+                        toast("切换引擎…重启引擎进程")
+                        EngineHolder.switchTo(this@MainActivity, name) { eng ->
+                            runOnUiThread {
+                                if (eng != null && eng.isReady) {
+                                    this@MainActivity.engine = eng
+                                    engineReady = true
+                                    statusMessage = "已切换 " + (if (name == "builtin") "内置皮卡鱼" else name)
+                                } else {
+                                    engineReady = false
+                                    statusMessage = "引擎切换失败"
+                                }
+                                renderInfo()
+                                buildSettingsPage(toPx)
+                            }
+                        }
+                    }
                 }
                 override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
             }
@@ -858,7 +884,7 @@ class MainActivity : AppCompatActivity() {
         engRow.addView(engSpin, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         settingsPage.addView(engRow)
         settingsPage.addView(TextView(this).apply {
-            text = "下载写入本地；切换后重启助手加载 NNUE。"
+            text = "下载写入本地后可在上方切换；切换会重启引擎进程。"
             textSize = 11f
             setTextColor(Color.parseColor("#888888"))
         })
@@ -1124,7 +1150,22 @@ class MainActivity : AppCompatActivity() {
         val side = controller.sideToMove
         val history = controller.moves.map { it.iccs() }
         val requestToken = positionToken
+        val pos = controller.displayPos
         analysisJob = lifecycleScope.launch(Dispatchers.IO) {
+            // 持续分析：启用库时先显示库着，再引擎
+            if (BookManager.enabled) {
+                val hits = try { BookManager.query(this@MainActivity, pos) } catch (_: Throwable) { emptyList() }
+                val best = hits.firstOrNull()
+                if (best != null) {
+                    withContext(Dispatchers.Main) {
+                        if (requestToken != positionToken) return@withContext
+                        lastResult = EngineResult(bestmove = best.move, fen = fen)
+                        controller.hintFromIccs(best.move)
+                        renderInfo()
+                    }
+                    // 库着命中后仍继续引擎深算，避免 tight-loop
+                }
+            }
             val result = requestEngine(fen, side, infinite = true, history = history)
             withContext(Dispatchers.Main) {
                 if (requestToken != positionToken) return@withContext
@@ -1140,6 +1181,7 @@ class MainActivity : AppCompatActivity() {
             renderInfo()
             return
         }
+        // 优先开局库（与执红/执黑一致）
         analyzeAndMove(controller.sideToMove)
     }
 
