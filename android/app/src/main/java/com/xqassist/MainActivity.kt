@@ -2205,11 +2205,11 @@ class MainActivity : AppCompatActivity() {
     private fun scoreTextFor(analyzedSide: String, mate: Int?, cp: Int?): String {
         val sign = if (analyzedSide == "w") 1 else -1
         mate?.let { value ->
+            if (value == 0) return cp?.let { if (it * sign >= 0) "红优 ${it * sign}" else "黑优 ${-(it * sign)}" } ?: "-"
             val redMate = value * sign
             return if (redMate > 0) "红优 #${redMate}" else "黑优 #${kotlin.math.abs(redMate)}"
         }
         val value = cp ?: return "-"
-        // 显示为兵值 * 100（即原 cp 分）
         val red = value * sign
         return if (red >= 0) "红优 ${red}" else "黑优 ${-red}"
     }

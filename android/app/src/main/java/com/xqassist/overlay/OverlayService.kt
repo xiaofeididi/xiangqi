@@ -534,8 +534,9 @@ class OverlayService : Service(), OverlayDisplay {
 
     private fun buildLine(result: EngineResult, board: Position?): String {
         val score = when {
-            result.mateIn != null -> "绝杀${result.mateIn}"
+            result.mateIn != null && result.mateIn != 0 -> "绝杀${result.mateIn}"
             result.scoreCp != null -> "${result.scoreCp}"
+            result.mateIn != null && result.mateIn == 0 -> "0"
             else -> "-"
         }
         val pv = if (board != null && result.pv.isNotEmpty()) {
