@@ -1595,6 +1595,10 @@ class MainActivity : AppCompatActivity() {
         controller.newGame()
         analysisMode = false
         engineSides.clear()
+        positionToken++
+        lastResult = EngineResult()
+        ConnectSession.clearStaleResult()
+        BookManager.clearHit()
         statusMessage = "新局开始，红方先行"
         afterMoveChanged("新局")
     }

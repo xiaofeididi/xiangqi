@@ -463,7 +463,8 @@ object ConnectSession {
     }
 
     /** 识别失败时清掉旧着法，避免悬浮窗一直显示上一步的「象四进六」 */
-    private fun clearStaleResult() {
+    /** 识别失败/新局时清掉旧着法，避免悬浮窗一直显示上一步「象四进六」或误报绝杀 */
+    fun clearStaleResult() {
         lastResult = EngineResult()
         lastFen = ""
         lastBoard = null
