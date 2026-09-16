@@ -11,6 +11,8 @@ object YoloNcnn {
     private external fun nativeInit(param: String, bin: String): Boolean
     private external fun nativeDetect(bitmap: Bitmap): FloatArray?
     private external fun nativeOutC(): Int
+    private external fun nativeOutW(): Int
+    private external fun nativeOutH(): Int
     private external fun nativeRelease()
 
     @Volatile
@@ -20,6 +22,14 @@ object YoloNcnn {
     @Volatile
     var lastError = ""
         private set
+
+    /** 最近一次 detect 的输出形状 */
+    @Volatile
+    var outC = 22
+    @Volatile
+    var outW = 8400
+    @Volatile
+    var outH = 1
 
     fun init(paramPath: String, binPath: String): Boolean {
         return try {
@@ -34,20 +44,24 @@ object YoloNcnn {
         }
     }
 
-    /** returns flattened [C, N] or null */
+    /** returns flattened output or null; updates outC/outW/outH */
     fun detect(bitmap: Bitmap): FloatArray? {
         if (!ready) return null
         return try {
-            nativeDetect(bitmap)
+            val arr = nativeDetect(bitmap)
+            if (arr != null) {
+                try {
+                    outC = nativeOutC()
+                    outW = nativeOutW()
+                    outH = nativeOutH()
+                } catch (_: Throwable) {}
+            }
+            arr
         } catch (t: Throwable) {
             lastError = t.message ?: "detect"
             null
         }
     }
-
-    fun outC(): Int = if (ready) {
-        try { nativeOutC().coerceIn(8, 32) } catch (_: Throwable) { 22 }
-    } else 22
 
     fun release() {
         try { nativeRelease() } catch (_: Throwable) {}

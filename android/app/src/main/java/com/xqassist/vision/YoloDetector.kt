@@ -63,11 +63,19 @@ object YoloDetector {
     /** 解码检测：返回棋子列表（去掉盘、按尺寸过滤） */
     fun detectPieces(bitmap: Bitmap): List<Det>? {
         val raw = YoloNcnn.detect(bitmap) ?: return null
-        // 用实际输出通道数，不要写死 22
-        val c = YoloNcnn.outC().takeIf { it in 8..32 } ?: 22
-        val n = raw.size / c
+        val total = raw.size
+        if (total < 22) return null
+
+        // Pro 实测：out w=22, h=8400, c=1 → anchor-major，每个检测 22 个连续 float
+        // 也兼容 channel-major（c>=19）
+        val c = YoloNcnn.outC
+        val w = YoloNcnn.outW
+        val anchorMajor = c <= 1 && w in 16..32
+        val stride = if (anchorMajor) w else 22
+        val n = total / stride
         if (n <= 0) return null
-        val nCls = c - 4
+        val nCls = stride - 4
+
         // letterbox params must match JNI
         val W = bitmap.width
         val H = bitmap.height
@@ -78,24 +86,28 @@ object YoloDetector {
         val ox = (S - nw) / 2f
         val oy = (S - nh) / 2f
 
+        fun at(det: Int, ch: Int): Float =
+            if (anchorMajor) raw[det * stride + ch]
+            else raw[ch * n + det]
+
         val dets = ArrayList<Det>()
         for (i in 0 until n) {
-            val bw = raw[2 * n + i]
-            val bh = raw[3 * n + i]
+            val bw = at(i, 2)
+            val bh = at(i, 3)
             val sz = minOf(bw, bh)
             if (sz < 18f || sz > 90f) continue
             var best = -1f
             var bestC = -1
             for (k in 0 until nCls) {
-                val s = raw[(4 + k) * n + i]
+                val s = at(i, 4 + k)
                 if (s > best) {
                     best = s
                     bestC = k
                 }
             }
             if (best < 0.5f || bestC < 0) continue
-            val cx = raw[0 * n + i]
-            val cy = raw[1 * n + i]
+            val cx = at(i, 0)
+            val cy = at(i, 1)
             // 640 → 原图
             val mx = (cx - ox) / sc
             val my = (cy - oy) / sc
@@ -103,6 +115,7 @@ object YoloDetector {
             val mh = bh / sc
             dets.add(Det(bestC, best, mx, my, mw, mh))
         }
+        Log.i(TAG, "detectPieces anchorMajor=$anchorMajor stride=$stride n=$n kept0=${dets.size}")
         // NMS
         val kept = nms(dets)
         // Pro j.g：按像素颜色校正红黑（classId +7 = 黑）

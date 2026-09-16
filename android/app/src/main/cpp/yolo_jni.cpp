@@ -28,6 +28,8 @@ void __libcpp_verbose_abort(const char* format, ...) {
 
 static ncnn::Net* g_net = nullptr;
 static int g_out_c = 22;
+static int g_out_w = 8400;
+static int g_out_h = 1;
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_xqassist_vision_YoloNcnn_nativeInit(JNIEnv* env, jobject, jstring jparam, jstring jbin) {
@@ -118,11 +120,16 @@ Java_com_xqassist_vision_YoloNcnn_nativeDetect(JNIEnv* env, jobject, jobject bit
         LOGE("extract ret=%d", ret);
         return nullptr;
     }
-    // out: c x 8400 (or similar)
+    // out: often w=22, h=8400, c=1 (anchor-major) — log full shape
     const int C = out.c;
+    const int W = out.w;
+    const int H = out.h;
+    const int D = out.d;
     g_out_c = C;
-    const int N = out.w * out.h * out.d;
-    LOGI("out c=%d n=%d", C, N);
+    g_out_w = W;
+    g_out_h = H;
+    const int N = W * H * D;
+    LOGI("out w=%d h=%d c=%d d=%d total=%d", W, H, C, D, C * N);
     jfloatArray arr = env->NewFloatArray((jsize)(C * N));
     if (!arr) return nullptr;
     std::vector<float> buf(C * N);
@@ -137,6 +144,16 @@ Java_com_xqassist_vision_YoloNcnn_nativeDetect(JNIEnv* env, jobject, jobject bit
 extern "C" JNIEXPORT jint JNICALL
 Java_com_xqassist_vision_YoloNcnn_nativeOutC(JNIEnv*, jobject) {
     return g_out_c;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_xqassist_vision_YoloNcnn_nativeOutW(JNIEnv*, jobject) {
+    return g_out_w;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_xqassist_vision_YoloNcnn_nativeOutH(JNIEnv*, jobject) {
+    return g_out_h;
 }
 
 extern "C" JNIEXPORT void JNICALL
