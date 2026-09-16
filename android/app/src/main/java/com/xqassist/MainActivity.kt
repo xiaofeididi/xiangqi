@@ -2094,47 +2094,50 @@ class MainActivity : AppCompatActivity() {
         ensurePermissionsThenOverlay()
     }
 
-    /** 所有入口共用：先弹三项校验清单，全✔才真正开悬浮窗 */
+    /** 悬浮窗：仅要求「显示在其他应用上层」；截屏/无障碍只提示不阻塞 */
     private fun ensurePermissionsThenOverlay() {
         val overlayOk = hasOverlayPermission()
         val a11yOk = hasAccessibilityPermission()
         val captureOk = hasCapturePermission()
 
-        if (overlayOk && a11yOk && captureOk) {
-            OverlayService.start(this)
-            overlayOn = true
-            Toast.makeText(this, "悬浮窗已开启", Toast.LENGTH_SHORT).show()
-            updateOverlayState()
-            return
-        }
-
-        val missing = buildString {
-            if (!overlayOk) append("· 悬浮窗权限：去系统允许显示在其他应用上层\n")
-            if (!a11yOk) append("· 无障碍：设置 → 无障碍 → 已安装的服务 → 象棋助手\n")
-            if (!captureOk) append("· 屏幕识别：允许本应用截屏/录制\n")
-        }
-        android.app.AlertDialog.Builder(this)
-            .setTitle("开启悬浮窗前需要 3 项权限")
-            .setMessage("${permissionChecklist()}\n\n未完成：\n$missing")
-            .setPositiveButton("去补全") { _, _ ->
-                when {
-                    !overlayOk -> startActivity(
+        if (!overlayOk) {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("需要悬浮窗权限")
+                .setMessage("请允许「显示在其他应用上层」，否则无法显示分析条。")
+                .setPositiveButton("去开启") {
+                    _, _ ->
+                    startActivity(
                         android.content.Intent(
                             android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                             android.net.Uri.parse("package:$packageName"),
                         ),
                     )
-                    !a11yOk -> startActivity(
-                        android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS),
-                    )
-                    else -> {
-                        pendingOpenOverlayAfterCapture = true
-                        ensureNotificationThenCapture()
-                    }
                 }
+                .setNegativeButton("取消", null)
+                .show()
+            return
+        }
+
+        OverlayService.start(this)
+        overlayOn = true
+        updateOverlayState()
+        val warn = buildString {
+            if (!captureOk) append("截屏未授权，点「析」前请先授权")
+            if (!a11yOk) {
+                if (isNotEmpty()) append("；")
+                append("无障碍未开，无法自动走子")
             }
-            .setNegativeButton("取消", null)
-            .show()
+        }
+        Toast.makeText(
+            this,
+            if (warn.isEmpty()) "悬浮窗已开启" else "悬浮窗已开启（$warn）",
+            Toast.LENGTH_LONG,
+        ).show()
+        // 截屏未开时，顺手引导一次
+        if (!captureOk) {
+            pendingOpenOverlayAfterCapture = false
+            ensureNotificationThenCapture()
+        }
     }
 
     private fun updateOverlayState() {
