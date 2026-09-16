@@ -103,9 +103,67 @@ object YoloDetector {
         }
         // NMS
         val kept = nms(dets)
-        lastDetectSummary = "yolo n=${kept.size} raw=${dets.size}"
-        Log.i(TAG, "detectPieces kept=${kept.size} raw=${dets.size}")
-        return kept
+        // Pro j.g：按像素颜色校正红黑（classId +7 = 黑）
+        val corrected = colorCorrect(bitmap, kept)
+        lastDetectSummary = "yolo n=${corrected.size} raw=${dets.size}"
+        Log.i(TAG, "detectPieces kept=${corrected.size} raw=${dets.size}")
+        return corrected
+    }
+
+    /**
+     * Pro w2.j.g 颜色校正：
+     * - 跳过 classId ∈ {2,3,4,6,9,11,13,14}（模型已定色）
+     * - 采样棋子边缘像素判红/黑
+     * - 黑：classId+7；classId==10 且红：classId-7
+     */
+    private fun colorCorrect(bitmap: Bitmap, dets: List<Det>): List<Det> {
+        val out = ArrayList<Det>(dets.size)
+        for (d in dets) {
+            var cls = d.cls
+            if (cls != 2 && cls != 3 && cls != 4 && cls != 6 &&
+                cls != 9 && cls != 11 && cls != 13 && cls != 14
+            ) {
+                val isRed = sampleIsRed(bitmap, d)
+                if (cls == 10) {
+                    if (isRed) cls -= 7
+                } else if (!isRed) {
+                    cls += 7
+                }
+            }
+            if (cls in 0..14) out.add(d.copy(cls = cls))
+        }
+        return out
+    }
+
+    /** 采样棋子外框 1/3–2/3 区域边缘像素，红多则 true */
+    private fun sampleIsRed(bitmap: Bitmap, d: Det): Boolean {
+        val x1 = (d.cx - d.w / 2f).toInt().coerceIn(0, bitmap.width - 1)
+        val x2 = (d.cx + d.w / 2f).toInt().coerceIn(0, bitmap.width - 1)
+        val y1 = (d.cy - d.h / 2f).toInt().coerceIn(0, bitmap.height - 1)
+        val y2 = (d.cy + d.h / 2f).toInt().coerceIn(0, bitmap.height - 1)
+        if (x2 - x1 < 3 || y2 - y1 < 3) return true
+        val xa = x1 + (x2 - x1) / 3
+        val xb = x1 + (x2 - x1) * 2 / 3
+        val ya = y1 + (y2 - y1) / 3
+        val yb = y1 + (y2 - y1) * 2 / 3
+        val ymid = (y1 + y2) / 2
+        var red = 0
+        var black = 0
+        fun count(px: Int) {
+            val r = android.graphics.Color.red(px)
+            val g = android.graphics.Color.green(px)
+            val b = android.graphics.Color.blue(px)
+            val lum = (r * 299 + g * 587 + b * 114) / 1000f
+            if (r > 120 && r > g * 1.5f && r > b * 1.5f && r - g > 60 && r - b > 60) red++
+            else if (lum < 60f && kotlin.math.abs(r - g) < 30 && kotlin.math.abs(r - b) < 30) black++
+        }
+        var x = xa
+        while (x < xb) { count(bitmap.getPixel(x, ya)); count(bitmap.getPixel(x, yb)); x++ }
+        var y = ya
+        while (y < yb) { count(bitmap.getPixel(xa, y)); count(bitmap.getPixel(xb, y)); y++ }
+        var x2s = xa
+        while (x2s < xb) { count(bitmap.getPixel(x2s, ymid)); x2s++ }
+        return red > black
     }
 
     private fun nms(dets: List<Det>, iouTh: Float = 0.4f): List<Det> {
