@@ -27,6 +27,7 @@ void __libcpp_verbose_abort(const char* format, ...) {
 }
 
 static ncnn::Net* g_net = nullptr;
+static int g_out_c = 22;
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_xqassist_vision_YoloNcnn_nativeInit(JNIEnv* env, jobject, jstring jparam, jstring jbin) {
@@ -117,9 +118,11 @@ Java_com_xqassist_vision_YoloNcnn_nativeDetect(JNIEnv* env, jobject, jobject bit
         LOGE("extract ret=%d", ret);
         return nullptr;
     }
-    // out: c=22, w=8400, h=1  (or similar)
+    // out: c x 8400 (or similar)
     const int C = out.c;
+    g_out_c = C;
     const int N = out.w * out.h * out.d;
+    LOGI("out c=%d n=%d", C, N);
     jfloatArray arr = env->NewFloatArray((jsize)(C * N));
     if (!arr) return nullptr;
     std::vector<float> buf(C * N);
@@ -133,7 +136,7 @@ Java_com_xqassist_vision_YoloNcnn_nativeDetect(JNIEnv* env, jobject, jobject bit
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_xqassist_vision_YoloNcnn_nativeOutC(JNIEnv*, jobject) {
-    return 22;
+    return g_out_c;
 }
 
 extern "C" JNIEXPORT void JNICALL

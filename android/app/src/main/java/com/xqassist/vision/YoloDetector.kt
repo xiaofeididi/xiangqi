@@ -63,9 +63,11 @@ object YoloDetector {
     /** 解码检测：返回棋子列表（去掉盘、按尺寸过滤） */
     fun detectPieces(bitmap: Bitmap): List<Det>? {
         val raw = YoloNcnn.detect(bitmap) ?: return null
-        val c = 22
+        // 用实际输出通道数，不要写死 22
+        val c = YoloNcnn.outC().takeIf { it in 8..32 } ?: 22
         val n = raw.size / c
         if (n <= 0) return null
+        val nCls = c - 4
         // letterbox params must match JNI
         val W = bitmap.width
         val H = bitmap.height
@@ -84,7 +86,7 @@ object YoloDetector {
             if (sz < 18f || sz > 90f) continue
             var best = -1f
             var bestC = -1
-            for (k in 0 until 15) {
+            for (k in 0 until nCls) {
                 val s = raw[(4 + k) * n + i]
                 if (s > best) {
                     best = s

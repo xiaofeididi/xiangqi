@@ -45,7 +45,9 @@ object YoloNcnn {
         }
     }
 
-    fun outC(): Int = if (ready) nativeOutC() else 22
+    fun outC(): Int = if (ready) {
+        try { nativeOutC().coerceIn(8, 32) } catch (_: Throwable) { 22 }
+    } else 22
 
     fun release() {
         try { nativeRelease() } catch (_: Throwable) {}
