@@ -121,23 +121,23 @@ Java_com_xqassist_vision_YoloNcnn_nativeDetect(JNIEnv* env, jobject, jobject bit
         return nullptr;
     }
     // out: often w=22, h=8400, c=1 (anchor-major) — log full shape
-    const int C = out.c;
-    const int W = out.w;
-    const int H = out.h;
-    const int D = out.d;
-    g_out_c = C;
-    g_out_w = W;
-    g_out_h = H;
-    const int N = W * H * D;
-    LOGI("out w=%d h=%d c=%d d=%d total=%d", W, H, C, D, C * N);
-    jfloatArray arr = env->NewFloatArray((jsize)(C * N));
+    const int Oc = out.c;
+    const int Ow = out.w;
+    const int Oh = out.h;
+    const int Od = out.d;
+    g_out_c = Oc;
+    g_out_w = Ow;
+    g_out_h = Oh;
+    const int N = Ow * Oh * Od;
+    LOGI("out w=%d h=%d c=%d d=%d total=%d", Ow, Oh, Oc, Od, Oc * N);
+    jfloatArray arr = env->NewFloatArray((jsize)(Oc * N));
     if (!arr) return nullptr;
-    std::vector<float> buf(C * N);
-    for (int c = 0; c < C; c++) {
+    std::vector<float> buf(Oc * N);
+    for (int c = 0; c < Oc; c++) {
         const float* p = out.channel(c);
         memcpy(buf.data() + (size_t)c * N, p, sizeof(float) * N);
     }
-    env->SetFloatArrayRegion(arr, 0, C * N, buf.data());
+    env->SetFloatArrayRegion(arr, 0, Oc * N, buf.data());
     return arr;
 }
 
