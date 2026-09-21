@@ -60,21 +60,17 @@ object YoloDetector {
         }
     }
 
-    /** 解码检测：返回棋子列表（去掉盘、按尺寸过滤） */
+    /** 解码检测：JNI 已统一输出 anchor-major [N*22]，直接按 stride=22 解码 */
     fun detectPieces(bitmap: Bitmap): List<Det>? {
         val raw = YoloNcnn.detect(bitmap) ?: return null
         val total = raw.size
         if (total < 22) return null
 
-        // Pro 实测：out w=22, h=8400, c=1 → anchor-major，每个检测 22 个连续 float
-        // 也兼容 channel-major（c>=19）
-        val c = YoloNcnn.outC
-        val w = YoloNcnn.outW
-        val anchorMajor = c <= 1 && w in 16..32
-        val stride = if (anchorMajor) w else 22
+        // JNI 保证 anchor-major：每 22 个 float 一个检测
+        val stride = 22
         val n = total / stride
         if (n <= 0) return null
-        val nCls = stride - 4
+        val nCls = 15  // ch4..18 = 15 类
 
         // letterbox params must match JNI
         val W = bitmap.width
@@ -86,9 +82,7 @@ object YoloDetector {
         val ox = (S - nw) / 2f
         val oy = (S - nh) / 2f
 
-        fun at(det: Int, ch: Int): Float =
-            if (anchorMajor) raw[det * stride + ch]
-            else raw[ch * n + det]
+        fun at(det: Int, ch: Int): Float = raw[det * stride + ch]
 
         val dets = ArrayList<Det>()
         for (i in 0 until n) {
@@ -115,7 +109,7 @@ object YoloDetector {
             val mh = bh / sc
             dets.add(Det(bestC, best, mx, my, mw, mh))
         }
-        Log.i(TAG, "detectPieces anchorMajor=$anchorMajor stride=$stride n=$n kept0=${dets.size}")
+        Log.i(TAG, "detectPieces n=$n kept0=${dets.size}")
         // NMS
         val kept = nms(dets)
         // Pro j.g：按像素颜色校正红黑（classId +7 = 黑）
@@ -263,6 +257,27 @@ object YoloDetector {
             right = (maxX + cell).toInt(),
             bottom = (maxY + cell).toInt(),
         )
+    }
+
+    /**
+     * Pro w2.j.b：优先用 classId==14（棋盘）检测框作为 rect。
+     * 返回 null 表示没检测到棋盘框，需 fallback 到 outerFromPieces。
+     */
+    fun findBoardRect(dets: List<Det>, minScore: Float = 0.5f): BoardRect? {
+        // 从后往前扫，和 Pro 一致
+        for (i in dets.indices.reversed()) {
+            val d = dets[i]
+            if (d.cls == BOARD_CLASS && d.score > minScore) {
+                val x1 = (d.cx - d.w / 2f).toInt()
+                val y1 = (d.cy - d.h / 2f).toInt()
+                val x2 = (d.cx + d.w / 2f).toInt()
+                val y2 = (d.cy + d.h / 2f).toInt()
+                if (x2 - x1 > 50 && y2 - y1 > 50) {
+                    return BoardRect(left = x1, top = y1, right = x2, bottom = y2)
+                }
+            }
+        }
+        return null
     }
 
     fun toGrid(dets: List<Det>, outer: BoardRect): Array<IntArray> {

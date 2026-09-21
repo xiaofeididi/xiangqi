@@ -120,7 +120,7 @@ Java_com_xqassist_vision_YoloNcnn_nativeDetect(JNIEnv* env, jobject, jobject bit
         LOGE("extract ret=%d", ret);
         return nullptr;
     }
-    // out: often w=22, h=8400, c=1 (anchor-major) — log full shape
+    // out: log shape, always output anchor-major [N * 22]
     const int Oc = out.c;
     const int Ow = out.w;
     const int Oh = out.h;
@@ -130,14 +130,38 @@ Java_com_xqassist_vision_YoloNcnn_nativeDetect(JNIEnv* env, jobject, jobject bit
     g_out_h = Oh;
     const int N = Ow * Oh * Od;
     LOGI("out w=%d h=%d c=%d d=%d total=%d", Ow, Oh, Oc, Od, Oc * N);
-    jfloatArray arr = env->NewFloatArray((jsize)(Oc * N));
+
+    // Determine layout:
+    //   channel-major: c>=19, w=N, h=1 → channel(ch)[i] = det i, channel ch
+    //   anchor-major:  c<=1,  w=22, h=N → channel(0)[i*22+ch] = det i, channel ch
+    // Always output: buf[i*22 + ch] for det i
+    const int STRIDE = 22;
+    const int numDet = (Oc >= 19 && Ow > 22) ? Ow : (Oh > 1 ? Oh : N / STRIDE);
+    if (numDet <= 0) return nullptr;
+
+    jfloatArray arr = env->NewFloatArray((jsize)(numDet * STRIDE));
     if (!arr) return nullptr;
-    std::vector<float> buf(Oc * N);
-    for (int c = 0; c < Oc; c++) {
-        const float* p = out.channel(c);
-        memcpy(buf.data() + (size_t)c * N, p, sizeof(float) * N);
+    std::vector<float> buf(numDet * STRIDE, 0.f);
+
+    if (Oc >= 19 && Ow > 22) {
+        // channel-major: out.channel(ch)[det] → buf[det*22+ch]
+        for (int ch = 0; ch < Oc && ch < STRIDE; ch++) {
+            const float* p = out.channel(ch);
+            if (!p) continue;
+            for (int i = 0; i < numDet; i++) {
+                buf[i * STRIDE + ch] = p[i];
+            }
+        }
+    } else {
+        // anchor-major or single-channel: flat copy
+        const float* p = out.channel(0);
+        if (!p) return nullptr;
+        int copyN = numDet * STRIDE;
+        if (copyN > Oc * N) copyN = Oc * N;
+        memcpy(buf.data(), p, sizeof(float) * copyN);
     }
-    env->SetFloatArrayRegion(arr, 0, Oc * N, buf.data());
+
+    env->SetFloatArrayRegion(arr, 0, numDet * STRIDE, buf.data());
     return arr;
 }
 

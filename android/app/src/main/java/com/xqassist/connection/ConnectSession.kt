@@ -495,15 +495,17 @@ object ConnectSession {
         return out
     }
 
-    /** Pro 路径：YOLO 检测 → 子中心 → 外框 → 格点 → 帅位翻转 */
+    /** Pro 路径：YOLO 检测 → 优先棋盘框(classId=14) → 格点 → 帅位翻转 */
     private fun recognizeByYolo(frame: android.graphics.Bitmap): RecognizeResult {
         val dets = YoloDetector.detectPieces(frame)
             ?: return RecognizeResult.Fail("YOLO 检测失败：${YoloDetector.lastError.ifBlank { "无结果" }}")
         if (dets.isEmpty()) {
             return RecognizeResult.Fail("YOLO 0 子，请确认画面是棋盘")
         }
-        val outer = YoloDetector.outerFromPieces(dets)
-            ?: return RecognizeResult.Fail("YOLO 无法从子心拟合棋盘(n=${dets.size})")
+        // 优先用 Pro 的棋盘框（classId==14），fallback 到子心拟合
+        val outer = YoloDetector.findBoardRect(dets)
+            ?: YoloDetector.outerFromPieces(dets)
+            ?: return RecognizeResult.Fail("YOLO 无法定位棋盘(n=${dets.size})")
         boardRect = outer
         appContext?.let { savePrefs(it) }
         val gridRaw = YoloDetector.toGrid(dets, outer)
