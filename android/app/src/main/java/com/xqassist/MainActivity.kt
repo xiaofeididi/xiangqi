@@ -579,13 +579,23 @@ class MainActivity : AppCompatActivity() {
                     }
                     if (position == 0) {
                         BookManager.useCloud(this@MainActivity)
+                        BookManager.clearHit()
+                        renderOpeningPage()
+                        toast("已切换云库")
                     } else {
                         val name = locals[position - 1]
-                        BookManager.openLocal(this@MainActivity, name)
+                        val ok = BookManager.openLocal(this@MainActivity, name)
+                        if (ok) {
+                            BookManager.clearHit()
+                            renderOpeningPage()
+                            toast("已切换 $name")
+                        } else {
+                            toast("切换失败：$name 文件异常")
+                            // 回退云库
+                            BookManager.useCloud(this@MainActivity)
+                            renderOpeningPage()
+                        }
                     }
-                    BookManager.clearHit()
-                    renderOpeningPage()
-                    toast("已切换 " + BookManager.summary())
                 }
                 override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
             }
@@ -663,11 +673,15 @@ class MainActivity : AppCompatActivity() {
                             downloadCloudFile(books[which], BookManager.booksDir(this)) { ok, name ->
                                 runOnUiThread {
                                     if (ok) {
-                                        BookManager.openLocal(this, name)
+                                        val opened = BookManager.openLocal(this, name)
                                         BookManager.clearHit()
                                         buildOpeningPage(toPx)
                                         renderOpeningPage()
-                                        toast("已下载并切换 $name")
+                                        if (opened) {
+                                            toast("已下载并切换 $name")
+                                        } else {
+                                            toast("下载完成但打开失败：$name")
+                                        }
                                     } else {
                                         toast("下载失败")
                                     }
@@ -861,16 +875,23 @@ class MainActivity : AppCompatActivity() {
                     }
                     val name = engNames[position]
                     if (name != currentEng) {
-                        toast("切换引擎…重启引擎进程")
+                        toast("切换引擎…")
                         EngineHolder.switchTo(this@MainActivity, name) { eng ->
                             runOnUiThread {
                                 if (eng != null && eng.isReady) {
                                     this@MainActivity.engine = eng
                                     engineReady = true
+                                    ConnectSession.provideEngine(eng)
+                                    ConnectSession.provideReader(basicReader)
                                     statusMessage = "已切换 " + (if (name == "builtin") "内置皮卡鱼" else name)
                                 } else {
-                                    engineReady = false
-                                    statusMessage = "引擎切换失败"
+                                    // switchTo 内部已回退内置
+                                    val fallback = EngineHolder.engine
+                                    this@MainActivity.engine = fallback
+                                    engineReady = fallback?.isReady == true
+                                    ConnectSession.provideEngine(fallback)
+                                    ConnectSession.provideReader(basicReader)
+                                    statusMessage = if (engineReady) "切换失败，已回退内置皮卡鱼" else "引擎启动失败"
                                 }
                                 renderInfo()
                                 buildSettingsPage(toPx)

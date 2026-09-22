@@ -41,6 +41,7 @@ object EngineInstaller {
     /**
      * 解析当前应使用的引擎二进制 + nnue。
      * name=builtin → 内置；否则 filesDir/engine/{name}/ 下找可执行文件和 nnue。
+     * 找不到或无法执行时回退内置，绝不返回无效路径。
      */
     fun resolve(context: Context): Pair<File, File?> {
         val name = preferredName(context)
@@ -48,18 +49,22 @@ object EngineInstaller {
             val folder = File(dir(context), name)
             if (folder.isDirectory) {
                 val bin = folder.listFiles()?.firstOrNull { f ->
-                    f.isFile && f.canExecute() && !f.name.endsWith(".nnue", true) && !f.name.endsWith(".###")
-                } ?: folder.listFiles()?.firstOrNull { f -> f.isFile && !f.name.endsWith(".nnue", true) }
-                val nnue = folder.listFiles()?.firstOrNull { it.name.endsWith(".nnue", true) }
-                if (bin != null && bin.exists() && bin.length() > 0) {
+                    f.isFile && f.length() > 1000 && !f.name.endsWith(".nnue", true) && !f.name.endsWith(".###")
+                }
+                val nnue = folder.listFiles()?.firstOrNull { it.name.endsWith(".nnue", true) && it.length() > 1000 }
+                if (bin != null) {
                     makeExecutable(bin)
-                    return bin to nnue
+                    // 验证可执行，不行就回退
+                    if (bin.canExecute()) {
+                        return bin to nnue
+                    }
+                    Log.w("EngineInstaller", "downloaded engine not executable: ${bin.absolutePath}")
                 }
             }
         }
         // fallback 内置
         val native = nativeEngineFile(context)
-        if (native.exists() && native.canExecute()) {
+        if (native.exists() && native.length() > 0) {
             makeExecutable(native)
             extractNnue(context)
             return native to nnueFile(context)

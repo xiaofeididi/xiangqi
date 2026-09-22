@@ -92,14 +92,16 @@ object BookManager {
             return false
         }
         return try {
+            val newDb = LocalBook(f.absolutePath)
             local?.close()
-            local = LocalBook(f.absolutePath)
+            local = newDb
             bookName = name
             mode = 1
             savePrefs(context)
             true
         } catch (t: Throwable) {
-            Log.w(TAG, "open book failed", t)
+            Log.w(TAG, "open book failed: ${f.name}", t)
+            // 不改 local/mode，保持旧状态
             false
         }
     }
@@ -140,8 +142,8 @@ object BookManager {
             } catch (t: Throwable) {
                 Log.w(TAG, "local query failed", t)
             }
-            // 本地模式：有无结果都停在这里，不自动回退云库
-        } else if (mode == 0) {
+        } else if (mode == 0 || (mode == 1 && book == null)) {
+            // 本地库不可用时回退云库
             val fen = pos.toFen()
             when (val r = cloud.query(fen)) {
                 is CloudBook.Result.Moves -> r.list.forEach {
