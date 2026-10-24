@@ -432,9 +432,14 @@ object ConnectSession {
         }
         BookManager.clearHit()
 
+        // 0.2.97: 引擎未就绪时只展示识别结果，不阻塞识别链路
+        val engineForAnalysis = eng ?: run {
+            publish("已识别（引擎未就绪，暂不分析）", State.ERROR, fen = boardFen, board = board)
+            return
+        }
         publish("皮卡鱼分析中…", State.ANALYZING, fen = boardFen, board = board)
         // 分析：固定短算，忽略深度/时间设置；仅出子(useEngineLimits)才用设置
-        val result = eng.analyze(
+        val result = engineForAnalysis.analyze(
             fen = boardFen,
             movetimeMs = if (useEngineLimits) thinkMs else 800,
             depth = if (useEngineLimits) searchDepth else 0,
