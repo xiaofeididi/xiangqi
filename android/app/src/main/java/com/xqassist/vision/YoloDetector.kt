@@ -15,6 +15,12 @@ object YoloDetector {
     private const val TAG = "Yolo"
     const val BOARD_CLASS = 14
 
+    /** 每个 anchor 的浮点数：4 个框 + N 个类别 */
+    private const val STRIDE = 22
+    /** 模型实际类别数（out0 22 路 → 18 类） */
+    private const val DEFAULT_NCLS = 18
+    private const val PIECE_MIN_SCORE = 0.5f
+
     data class Det(val cls: Int, val score: Float, val cx: Float, val cy: Float, val w: Float, val h: Float)
 
     @Volatile
@@ -27,6 +33,11 @@ object YoloDetector {
 
     @Volatile
     var lastDetectSummary: String = ""
+        private set
+
+    /** 最近一次检测保留的框数（-1 = 还没跑过） */
+    @Volatile
+    var lastCount: Int = -1
         private set
 
     fun init(context: Context): Boolean {
@@ -64,13 +75,13 @@ object YoloDetector {
     fun detectPieces(bitmap: Bitmap): List<Det>? {
         val raw = YoloNcnn.detect(bitmap) ?: return null
         val total = raw.size
-        if (total < 22) return null
+        if (total < STRIDE) return null
 
-        // JNI 保证 anchor-major：每 22 个 float 一个检测
-        val stride = 22
-        val n = total / stride
+        // JNI 保证 anchor-major：每 22 个 float 一个检测（4 框 + 18 类）
+        val n = total / STRIDE
         if (n <= 0) return null
-        val nCls = 15  // ch4..18 = 15 类
+        // 类别数 = 输出通道 - 4；实测 out0 = 22 路 → 18 类
+        val nCls = if (YoloNcnn.outC in 5..STRIDE) YoloNcnn.outC - 4 else DEFAULT_NCLS
 
         // letterbox params must match JNI
         val W = bitmap.width
@@ -82,14 +93,12 @@ object YoloDetector {
         val ox = (S - nw) / 2f
         val oy = (S - nh) / 2f
 
-        fun at(det: Int, ch: Int): Float = raw[det * stride + ch]
+        fun at(det: Int, ch: Int): Float = raw[det * STRIDE + ch]
 
         val dets = ArrayList<Det>()
         for (i in 0 until n) {
             val bw = at(i, 2)
             val bh = at(i, 3)
-            val sz = minOf(bw, bh)
-            if (sz < 18f || sz > 90f) continue
             var best = -1f
             var bestC = -1
             for (k in 0 until nCls) {
@@ -99,7 +108,12 @@ object YoloDetector {
                     bestC = k
                 }
             }
-            if (best < 0.5f || bestC < 0) continue
+            if (best < PIECE_MIN_SCORE || bestC < 0) continue
+            // 尺寸过滤只针对棋子：棋盘框自身就有几百像素，被筛掉后就拿不到原版那个 rect 了
+            if (bestC != BOARD_CLASS) {
+                val sz = minOf(bw, bh)
+                if (sz < 18f || sz > 90f) continue
+            }
             val cx = at(i, 0)
             val cy = at(i, 1)
             // 640 → 原图
@@ -114,6 +128,7 @@ object YoloDetector {
         val kept = nms(dets)
         // Pro j.g：按像素颜色校正红黑（classId +7 = 黑）
         val corrected = colorCorrect(bitmap, kept)
+        lastCount = corrected.size
         lastDetectSummary = "yolo n=${corrected.size} raw=${dets.size}"
         Log.i(TAG, "detectPieces kept=${corrected.size} raw=${dets.size}")
         return corrected
@@ -129,17 +144,26 @@ object YoloDetector {
         val out = ArrayList<Det>(dets.size)
         for (d in dets) {
             var cls = d.cls
-            if (cls != 2 && cls != 3 && cls != 4 && cls != 6 &&
-                cls != 9 && cls != 11 && cls != 13 && cls != 14
-            ) {
-                val isRed = sampleIsRed(bitmap, d)
-                if (cls == 10) {
-                    if (isRed) cls -= 7
-                } else if (!isRed) {
-                    cls += 7
+            when {
+                // 0..13 = 棋子；2/3/4/6、9/11/13 模型已定色，不动
+                cls in 0..13 -> {
+                    val colorDecided = cls == 2 || cls == 3 || cls == 4 || cls == 6 ||
+                        cls == 9 || cls == 11 || cls == 13
+                    if (!colorDecided) {
+                        val isRed = sampleIsRed(bitmap, d)
+                        if (cls == 10) {
+                            if (isRed) cls -= 7
+                        } else if (!isRed) {
+                            cls += 7
+                        }
+                    }
+                    if (cls in 0..13) out.add(d.copy(cls = cls))
                 }
+                // 14 = 棋盘，原样保留给 findBoardRect
+                cls == BOARD_CLASS -> out.add(d)
+                // 15..17 原版全程未使用，丢弃（以前会被当成棋盘，污染 rect）
+                else -> Unit
             }
-            if (cls in 0..14) out.add(d.copy(cls = cls))
         }
         return out
     }
@@ -263,7 +287,7 @@ object YoloDetector {
      * Pro w2.j.b：优先用 classId==14（棋盘）检测框作为 rect。
      * 返回 null 表示没检测到棋盘框，需 fallback 到 outerFromPieces。
      */
-    fun findBoardRect(dets: List<Det>, minScore: Float = 0.5f): BoardRect? {
+    fun findBoardRect(dets: List<Det>, minScore: Float = 0.7f): BoardRect? {
         // 从后往前扫，和 Pro 一致
         for (i in dets.indices.reversed()) {
             val d = dets[i]

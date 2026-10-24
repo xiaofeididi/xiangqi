@@ -43,6 +43,10 @@ object ConnectSession {
     private const val KEY_AUTO = "auto_move"
     private const val KEY_INTERVAL = "interval_ms"
 
+    /** 棋盘 rect 约定版本：2 = 外框（宽 10 格、高 11 格）。旧版存的是交叉点范围，不兼容 */
+    private const val KEY_RECT_VER = "rect_ver"
+    private const val RECT_VER = 2
+
     enum class State {
         IDLE, WAITING_FRAME, RECOGNIZING, ANALYZING, AUTO_PLAYING, PAUSED, ERROR
     }
@@ -355,8 +359,9 @@ object ConnectSession {
             pendingHits = 1
             publish(
                 "识别中…（校验 " + pendingHits + "/" + STABLE_HITS + " · " + pieceCount + "子 · yolo=" +
-                    (if (yoloOk) "on" else "off") + " · rect=" +
-                    (boardRect?.let { it.left.toString() + "," + it.top.toString() } ?: "-") +
+                    (if (yoloOk) "on" else "off") +
+                    (if (YoloDetector.lastCount >= 0) "(" + YoloDetector.lastCount + ")" else "(?)") +
+                    " · rect=" + (boardRect?.let { it.left.toString() + "," + it.top.toString() } ?: "-") +
                     " · " + elapsed + "ms）",
                 State.RECOGNIZING
             )
@@ -529,8 +534,9 @@ object ConnectSession {
         if (dets.isEmpty()) {
             return RecognizeResult.Fail("YOLO 0 子，请确认画面是棋盘")
         }
-        // 优先用 Pro 的棋盘框（classId==14），fallback 到子心拟合
+        // 0.2.100: 棋盘框(classId=14, conf>0.7) → 细线网格 → 子心拟合
         val outer = YoloDetector.findBoardRect(dets)
+            ?: runCatching { com.xqassist.vision.LineGridLocator.locate(frame) }.getOrNull()
             ?: YoloDetector.outerFromPieces(dets)
             ?: return RecognizeResult.Fail("YOLO 无法定位棋盘(n=${dets.size})")
         boardRect = outer
@@ -713,8 +719,15 @@ object ConnectSession {
         val top = p.getInt(KEY_TOP, Int.MIN_VALUE)
         val right = p.getInt(KEY_RIGHT, Int.MIN_VALUE)
         val bottom = p.getInt(KEY_BOTTOM, Int.MIN_VALUE)
-        if (left != Int.MIN_VALUE && top != Int.MIN_VALUE && right != Int.MIN_VALUE && bottom != Int.MIN_VALUE) {
+        // 0.2.100: <=0.2.99 存的 rect 是"交叉点范围"，与 w/10·h/11 外框约定差一格，直接作废重找
+        val rectVer = p.getInt(KEY_RECT_VER, 0)
+        if (rectVer >= RECT_VER &&
+            left != Int.MIN_VALUE && top != Int.MIN_VALUE &&
+            right != Int.MIN_VALUE && bottom != Int.MIN_VALUE
+        ) {
             boardRect = BoardRect(left, top, right, bottom)
+        } else {
+            boardRect = null
         }
         sideToMove = p.getString(KEY_SIDE, "w") ?: "w"
         intervalMs = p.getInt(KEY_INTERVAL, 2000)
@@ -735,6 +748,7 @@ object ConnectSession {
                 remove(KEY_RIGHT)
                 remove(KEY_BOTTOM)
             }
+            putInt(KEY_RECT_VER, RECT_VER)
             putString(KEY_SIDE, sideToMove)
             putInt(KEY_INTERVAL, intervalMs)
             putBoolean(KEY_AUTO, autoMoveOn)

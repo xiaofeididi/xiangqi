@@ -16,7 +16,8 @@ import kotlin.math.sqrt
  *   1. 降采样后取灰度；
  *   2. 逐像素算"细线分"：本像素比左右(上下) ±3px 明显更暗，才算线（这样棋子的圆盘不会被误判成线）；
  *   3. 对列/行分别取峰，再用"等距约束"挑出 9 条竖线 / 10 条横线（变异系数最小）；
- *   4. 返回的 BoardRect 是**交叉点范围**（不是棋盘外框），可直接喂给识别器。
+ *   4. 返回的 BoardRect 是**棋盘外框**（宽 10 格、高 11 格，与 ChessboardReader 的 w/10、h/11 约定一致），
+ *      由交叉点范围向四周各外扩一格得到。
  *
  * 实测样例（1080×2400 木纹棋盘）：竖线 x=80,196,310,426,540,654,770,884,1010；
  * 横线 y=692,806,920,1032,1146,1264,1378,1490,1604,1730，格距 116×115。
@@ -87,11 +88,16 @@ object LineGridLocator {
         if (cols.last() - cols.first() < cw * 0.25f) return null
         if (rows.last() - rows.first() < ch * 0.25f) return null
 
+        // 下游（ChessboardReader / TemplatePieceReader / YoloDetector.cellOf / autoPlay）
+        // 统一按"棋盘外框"约定：宽 = 10 格、高 = 11 格，第一条线在 left+cellW / top+cellH。
+        // 这里拿到的是 9 竖 10 横（8×9 格）的交叉点范围，必须四周各外扩一格。
+        // 外扩后可能为负（棋盘贴屏幕边时），下游采样都做了越界判断，不会崩。
+        fun outer(v: Float) = (v * DOWNSCALE).toInt()
         return BoardRect(
-            left = cols.first() * DOWNSCALE,
-            top = rows.first() * DOWNSCALE,
-            right = cols.last() * DOWNSCALE,
-            bottom = rows.last() * DOWNSCALE,
+            left = outer(cols.first() - stepX),
+            top = outer(rows.first() - stepY),
+            right = outer(cols.last() + stepX),
+            bottom = outer(rows.last() + stepY),
         )
     }
 
