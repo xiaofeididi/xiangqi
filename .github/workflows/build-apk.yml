@@ -58,6 +58,7 @@ jobs:
       # 需要配置：DEPLOY_HOST / DEPLOY_PORT / DEPLOY_USER / DEPLOY_PASS / DEPLOY_PATH
       - name: Push APK to build server
         if: success()
+        continue-on-error: true   # CI 出口 IP 不固定，服务器侧改为主动拉取 Release
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
