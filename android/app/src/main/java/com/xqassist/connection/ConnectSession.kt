@@ -257,10 +257,8 @@ object ConnectSession {
         val eng = engine
         val yoloOk = YoloDetector.isReady
         val rd = reader
-        if (eng?.isReady != true) {
-            publish("引擎未就绪", State.ERROR)
-            return
-        }
+        // 0.2.97: 识别与引擎解耦——引擎没就绪也必须能识别局面
+        @Suppress("UNUSED_VARIABLE") val engineReady = eng?.isReady == true
         if (!yoloOk && rd == null) {
             publish("识别器未就绪", State.ERROR)
             return
@@ -281,9 +279,25 @@ object ConnectSession {
         }
 
         val started = System.currentTimeMillis()
-        // 优先 Pro YOLO；失败再回退模板格点
+        // 0.2.97: 双路识别——YOLO 与模板/峰值法各跑一次，取更优（YOLO 0 子不再直接失败）
         val recognized = withContext(Dispatchers.IO) {
-            if (yoloOk) recognizeByYolo(frame) else recognizeByTemplate(frame, rd)
+            val yolo: RecognizeResult = if (yoloOk) {
+                runCatching { recognizeByYolo(frame) }
+                    .getOrElse { RecognizeResult.Fail("YOLO 异常：" + it.message) }
+            } else RecognizeResult.Fail("YOLO 未就绪")
+            if (yolo is RecognizeResult.Ok && boardQuality(yolo.board) >= 8) {
+                yolo
+            } else {
+                val tpl: RecognizeResult = runCatching { recognizeByTemplate(frame, rd) }
+                    .getOrElse { RecognizeResult.Fail("模板识别异常：" + it.message) }
+                when {
+                    tpl is RecognizeResult.Ok && yolo is RecognizeResult.Ok ->
+                        if (boardQuality(tpl.board) >= boardQuality(yolo.board)) tpl else yolo
+                    tpl is RecognizeResult.Ok -> tpl
+                    yolo is RecognizeResult.Ok -> yolo
+                    else -> tpl
+                }
+            }
         }
         val elapsed = System.currentTimeMillis() - started
 
@@ -302,13 +316,15 @@ object ConnectSession {
         val pieceCount = countPieces(board)
         val hasWhiteKing = hasKing(board, "w")
         val hasBlackKing = hasKing(board, "b")
-        if (pieceCount < 4 || !hasWhiteKing || !hasBlackKing) {
+        // 0.2.97: 预览/提示模式放宽；自动下棋才要求双方将帅齐全
+        val bothKings = hasWhiteKing && hasBlackKing
+        if (pieceCount < 4 || (autoMoveOn && !bothKings)) {
             lastRecognizedOk = false
             lastRecognizedSummary = ""
             clearStaleResult()
             if (pieceCount < 2) {
                 emptyBoardTicks++
-                if (emptyBoardTicks >= 3 && boardRect != null) {
+                if (emptyBoardTicks >= 5 && boardRect != null) {
                     emptyBoardTicks = 0
                     boardRect = null
                     appContext?.let { savePrefs(it) }
@@ -337,7 +353,13 @@ object ConnectSession {
         if (boardFen != pendingFen) {
             pendingFen = boardFen
             pendingHits = 1
-            publish("识别中…（校验 $pendingHits/$STABLE_HITS · ${pieceCount}子）", State.RECOGNIZING)
+            publish(
+                "识别中…（校验 " + pendingHits + "/" + STABLE_HITS + " · " + pieceCount + "子 · yolo=" +
+                    (if (yoloOk) "on" else "off") + " · rect=" +
+                    (boardRect?.let { it.left.toString() + "," + it.top.toString() } ?: "-") +
+                    " · " + elapsed + "ms）",
+                State.RECOGNIZING
+            )
             return
         }
         pendingHits++
@@ -577,6 +599,14 @@ object ConnectSession {
         while (parts.size < 2) parts.add("w")
         parts[1] = sideToMove
         return parts.joinToString(" ")
+    }
+
+    /** 局面质量分：子数 + 将帅加成，用于双路择优（0.2.97）。 */
+    private fun boardQuality(board: Position): Int {
+        var q = countPieces(board)
+        if (hasKing(board, "w")) q += 6
+        if (hasKing(board, "b")) q += 6
+        return q
     }
 
     private fun countPieces(board: Position): Int {
