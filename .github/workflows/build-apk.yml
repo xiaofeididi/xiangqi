@@ -54,12 +54,25 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+      # 上传到构建服务器：所有连接信息走仓库 Secrets，代码里不再出现明文
+      # 需要配置：DEPLOY_HOST / DEPLOY_PORT / DEPLOY_USER / DEPLOY_PASS / DEPLOY_PATH
       - name: Push APK to build server
         if: success()
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PASS: ${{ secrets.DEPLOY_PASS }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
+          if [ -z "$DEPLOY_PASS" ] || [ -z "$DEPLOY_HOST" ]; then
+            echo "::warning::DEPLOY_* secrets not configured, skip upload"
+            exit 0
+          fi
           sudo apt-get update -qq
           sudo apt-get install -y -qq sshpass
-          sshpass -p 'liudi123..CY' scp -o StrictHostKeyChecking=no -P 9527 \
+          sshpass -p "$DEPLOY_PASS" scp -o StrictHostKeyChecking=no \
+            -P "${DEPLOY_PORT:-22}" \
             android/app/build/outputs/apk/debug/app-debug.apk \
-            root@192.227.243.101:/tmp/xq-latest.apk
-          echo "APK pushed to server /tmp/xq-latest.apk"
+            "${DEPLOY_USER:-root}@${DEPLOY_HOST}:${DEPLOY_PATH:-/tmp/xq-latest.apk}"
+          echo "APK pushed to ${DEPLOY_HOST}:${DEPLOY_PATH:-/tmp/xq-latest.apk}"
