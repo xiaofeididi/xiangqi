@@ -68,7 +68,7 @@ jobs:
           body: |
             xq-assist auto build.
 
-            - Overlay v0.5 UI (book enable, no mini board)
-            - Engine/book download from Pro public API
+            - commit: ${{ github.sha }}
+            - 由 GitHub Actions 自动构建（assembleDebug）
             - SHA-256: ${{ steps.sha256.outputs.apk_sha256 }}
           files: android/app/build/outputs/apk/debug/app-debug.apk
