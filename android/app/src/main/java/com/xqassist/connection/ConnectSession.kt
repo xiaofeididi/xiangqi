@@ -545,7 +545,14 @@ object ConnectSession {
     private fun recognizeByTemplate(frame: android.graphics.Bitmap, rd: com.xqassist.vision.ChessboardReader?): RecognizeResult {
         var rect = boardRect
         if (rect == null) {
+            // 0.2.99: 优先"细线+等距"网格定位（对木纹/彩色皮肤更稳），失败再退回木色块包围盒
             rect = try {
+                com.xqassist.vision.LineGridLocator.locate(frame)
+            } catch (t: Throwable) {
+                Log.w(TAG, "LineGridLocator failed", t)
+                null
+            }
+            if (rect == null) rect = try {
                 BoardAutoDetector.detect(frame)
             } catch (t: Throwable) {
                 Log.w(TAG, "BoardAutoDetector failed", t)
